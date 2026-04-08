@@ -1,0 +1,55 @@
+{
+  "name": "kysely-do",
+  "version": "0.1.0",
+  "description": "Kysely dialect for Cloudflare Durable Object SQLite storage (ctx.storage.sql)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:workerd": "vitest run --config vitest.workerd.config.ts",
+    "lint": "eslint src/ test/",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "kysely",
+    "cloudflare",
+    "durable-objects",
+    "sqlite",
+    "workers",
+    "dialect",
+    "mikro-orm"
+  ],
+  "author": "Jeff Wilde <jeff@robo.ai>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jeffwilde/kysely-do.git"
+  },
+  "peerDependencies": {
+    "kysely": ">=0.27.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.14.2",
+    "@cloudflare/workers-types": "^4.20260408.1",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "kysely": "^0.28.15",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.0.0"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "kysely-do-test",
+  "main": "test/workerd/worker.ts",
+  "compatibility_date": "2026-04-06",
+  "durable_objects": {
+    "bindings": [
+      { "name": "TEST_DO", "class_name": "TestDO" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["TestDO"] }
+  ]
+}
