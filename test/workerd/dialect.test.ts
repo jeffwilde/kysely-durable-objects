@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { TestDO } from './worker.js';
 
 describe('DurableObjectSqliteDialect in workerd', () => {
@@ -12,16 +12,75 @@ describe('DurableObjectSqliteDialect in workerd', () => {
     return env.TEST_DO.get(id);
   }
 
-  it('documents eval behavior in test context', async () => {
-    const stub = getStub('eval-test');
-    const result = await stub.testEvalRestriction();
-    // In the vitest-pool-workers test runner, eval may be allowed due to
-    // relaxed test permissions. In production workerd, eval IS blocked
-    // during request handling. This test documents current test-runner behavior.
-    // The real value of workerd tests is catching SqlStorage API mismatches,
-    // not eval restrictions (which the test runner relaxes).
-    expect(['eval-allowed', 'eval-blocked']).toContain(result);
+  // ---------- eval guard tests ----------
+  // These tests monkey-patch Function/eval inside the DO to simulate
+  // production workerd restrictions where dynamic code generation throws EvalError.
+
+  it('eval guard blocks new Function() inside the DO', async () => {
+    const stub = getStub('eval-guard-verify');
+    // Without the guard, eval is allowed in the test runner
+    const before = await stub.testEvalRestriction();
+    expect(before).toBe('eval-allowed');
+
+    // Enable the guard — now eval should be blocked
+    await stub.enableEvalGuard();
+    const after = await stub.testEvalRestriction();
+    expect(after).toBe('eval-blocked');
+
+    // Restore
+    await stub.disableEvalGuard();
+    const restored = await stub.testEvalRestriction();
+    expect(restored).toBe('eval-allowed');
   });
+
+  it('dialect CRUD works with eval blocked (simulated production workerd)', async () => {
+    const stub = getStub('eval-guarded-crud');
+    await stub.setupSchema();
+    await stub.enableEvalGuard();
+
+    // INSERT
+    const alice = await stub.insertUser('Alice', 'alice@example.com');
+    expect(alice.name).toBe('Alice');
+    expect(alice.id).toBeDefined();
+
+    // SELECT
+    const fetched = await stub.getUser(alice.id);
+    expect(fetched).toBeDefined();
+    expect(fetched!.email).toBe('alice@example.com');
+
+    // UPDATE
+    await stub.updateUser(alice.id, 'Alicia');
+    const updated = await stub.getUser(alice.id);
+    expect(updated!.name).toBe('Alicia');
+
+    // DELETE
+    await stub.deleteUser(alice.id);
+    const deleted = await stub.getUser(alice.id);
+    expect(deleted).toBeUndefined();
+
+    // All CRUD succeeded without eval — dialect is eval-free
+    await stub.disableEvalGuard();
+  });
+
+  it('multiple inserts with auto-increment work with eval blocked', async () => {
+    const stub = getStub('eval-guarded-multi');
+    await stub.setupSchema();
+    await stub.enableEvalGuard();
+
+    const user1 = await stub.insertUser('Alice', 'alice@example.com');
+    const user2 = await stub.insertUser('Bob', 'bob@example.com');
+    const user3 = await stub.insertUser('Charlie', 'charlie@example.com');
+
+    expect(user1.id).toBeLessThan(user2.id);
+    expect(user2.id).toBeLessThan(user3.id);
+
+    const all = await stub.getAllUsers();
+    expect(all).toHaveLength(3);
+
+    await stub.disableEvalGuard();
+  });
+
+  // ---------- standard dialect tests (no eval guard) ----------
 
   it('creates tables via Kysely schema builder', async () => {
     const stub = getStub('schema-test');
@@ -105,7 +164,6 @@ describe('DurableObjectSqliteDialect in workerd', () => {
     await stub.insertUser('Alice', 'alice@example.com');
 
     await runInDurableObject(stub, async (_instance, state) => {
-      // Access storage directly to verify the dialect wrote real data
       const rows = state.storage.sql
         .exec<{ name: string }>('SELECT name FROM users')
         .toArray();
