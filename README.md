@@ -108,32 +108,17 @@ The dialect bridges DO `SqlStorage` to the `better-sqlite3` interface that Kysel
 
 ### Limitations
 
-- **No explicit transactions**: DO SQLite storage doesn't support `BEGIN`/`COMMIT`. Each `exec()` call is atomic. Set `implicitTransactions: false` when using with MikroORM.
+- **Transactions are silent no-ops**: CF Workers blocks raw `BEGIN`/`COMMIT`/`ROLLBACK`/`SAVEPOINT` SQL inside a DO. The dialect intercepts these statements and skips them so `db.transaction()` doesn't throw, but you get no atomicity — DOs are already serialized per-instance, so explicit transactions add nothing. Set `implicitTransactions: false` when using with MikroORM.
 - **`changes()` / `last_insert_rowid()` are separate queries**: After each mutation, two additional `SELECT` calls retrieve the metadata. This is safe because DOs are single-threaded (no concurrent request interleaving).
 - **No prepared statement caching**: Each query creates a fresh `exec()` call. DO storage handles its own query optimization internally.
 
 ## Testing
 
-### Unit tests (Node.js)
-
 ```bash
 npm test
 ```
 
-Runs tests with a mock `SqlStorage` implementation — useful for fast iteration and CI.
-
-### Integration tests (workerd)
-
-```bash
-npm run test:workerd
-```
-
-Runs tests inside the actual Cloudflare Workers runtime (`workerd`) via [`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/). These tests:
-
-- Execute inside real `workerd` — not mocked, not simulated
-- Use actual DO SQLite storage with per-test isolation
-- Verify `new Function()` is blocked (confirming `compiledFunctions` is necessary)
-- Test full CRUD operations through the dialect
+Tests run inside the actual Cloudflare Workers runtime (`workerd`) via [`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/), against real `ctx.storage.sql` inside a real Durable Object. Where the local runner diverges from production behavior, the suite simulates the production constraint to keep the dialect honest.
 
 ## API
 
@@ -158,6 +143,13 @@ import type { SqlStorage, SqlStorageCursor } from 'kysely-do';
 ```
 
 TypeScript interfaces for the DO SQLite Storage API, exported for convenience. These mirror the types from `@cloudflare/workers-types` so you don't need a hard dependency on that package.
+
+## TODO
+
+- Real-DO sanity mode — opt-in suite that deploys an ephemeral Worker + DO to a real Cloudflare account and runs the full test matrix against production runtime
+- Type-fidelity tests for `NULL`, `BLOB`, `BigInt`, dates, JSON
+- Concurrency tests covering `await`-boundary interleaving, input/output gates, and `blockConcurrencyWhile`
+- Kysely migrations support — verify the migration runner works inside a DO and document whether the `kysely_migration_lock` table is needed given per-DO serialization (likely redundant)
 
 ## License
 

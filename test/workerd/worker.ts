@@ -152,6 +152,29 @@ export class TestDO extends DurableObject {
       .where('id', '=', id)
       .execute();
   }
+
+  async destroyDb(): Promise<void> {
+    await this.db.destroy();
+  }
+
+  async runTransaction(): Promise<UserRow[]> {
+    return (await this.db.transaction().execute(async (trx) => {
+      await trx
+        .insertInto('users')
+        .values({ name: 'Tx1', email: 'tx1@example.com' } as any)
+        .execute();
+      await trx
+        .insertInto('users')
+        .values({ name: 'Tx2', email: 'tx2@example.com' } as any)
+        .execute();
+      return await trx.selectFrom('users').selectAll().execute();
+    })) as UserRow[];
+  }
+
+  async dialectCloneIsSelf(): Promise<boolean> {
+    const dialect = new DurableObjectSqliteDialect(this.ctx.storage.sql);
+    return dialect.clone() === dialect;
+  }
 }
 
 export default {

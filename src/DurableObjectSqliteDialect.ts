@@ -1,6 +1,8 @@
 import { SqliteDialect } from 'kysely';
 import type { SqlStorage } from './types.js';
 
+const TRANSACTION_CONTROL = /^\s*(begin|commit|rollback|savepoint|release)\b/i;
+
 /**
  * Kysely dialect for Cloudflare Durable Object SQLite storage.
  *
@@ -57,14 +59,20 @@ export class DurableObjectSqliteDialect extends SqliteDialect {
     super({
       database: () => ({
         prepare(query: string) {
+          // CF Workers blocks raw BEGIN/COMMIT/ROLLBACK/SAVEPOINT SQL inside a DO.
+          // Kysely's transaction layer issues these via prepare().run(), so we turn
+          // transaction control into a no-op. DOs are serialized per-instance, so
+          // explicit transactions add no atomicity anyway.
+          const isTxControl = TRANSACTION_CONTROL.test(query);
+
           return {
-            // Determine if this is a read query (SELECT, PRAGMA, etc.)
-            // or a write query with RETURNING clause.
             reader:
-              /^\s*(select|pragma|explain|with)/i.test(query) ||
-              /\breturning\b/i.test(query),
+              !isTxControl &&
+              (/^\s*(select|pragma|explain|with)/i.test(query) ||
+                /\breturning\b/i.test(query)),
 
             all(params: ReadonlyArray<unknown>): unknown[] {
+              if (isTxControl) return [];
               return sql.exec(query, ...params).toArray();
             },
 
@@ -72,6 +80,7 @@ export class DurableObjectSqliteDialect extends SqliteDialect {
               changes: number | bigint;
               lastInsertRowid: number | bigint;
             } {
+              if (isTxControl) return { changes: 0, lastInsertRowid: 0 };
               sql.exec(query, ...params);
               // DO SqlStorage doesn't return changes/lastInsertRowid from exec(),
               // so we query SQLite's built-in functions to retrieve them.
@@ -88,11 +97,13 @@ export class DurableObjectSqliteDialect extends SqliteDialect {
             },
 
             get(params: ReadonlyArray<unknown>): unknown {
+              if (isTxControl) return undefined;
               const rows = sql.exec(query, ...params).toArray();
               return rows[0];
             },
 
             *iterate(params: ReadonlyArray<unknown>): IterableIterator<unknown> {
+              if (isTxControl) return;
               for (const row of sql.exec(query, ...params)) {
                 yield row;
               }
@@ -106,5 +117,14 @@ export class DurableObjectSqliteDialect extends SqliteDialect {
         },
       }) as any,
     });
+  }
+
+  /**
+   * MikroORM's `Utils.copy()` deep-clones `driverOptions` inside the Connection
+   * constructor, which would sever the closure around `ctx.storage.sql` and
+   * yield a broken dialect. Returning `this` short-circuits that path.
+   */
+  clone(): this {
+    return this;
   }
 }

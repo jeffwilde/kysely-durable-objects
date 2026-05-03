@@ -178,4 +178,29 @@ describe('DurableObjectSqliteDialect in workerd', () => {
     const users = await stub.getAllUsers();
     expect(users).toHaveLength(0);
   });
+
+  it('destroy() does not throw', async () => {
+    const stub = getStub('destroy-test');
+    await stub.setupSchema();
+    await stub.insertUser('Alice', 'alice@example.com');
+    await expect(stub.destroyDb()).resolves.not.toThrow();
+  });
+
+  it('Kysely transactions are no-ops but inserts still apply', async () => {
+    const stub = getStub('transaction-test');
+    await stub.setupSchema();
+
+    const insideTx = await stub.runTransaction();
+    expect(insideTx).toHaveLength(2);
+    expect(insideTx.map((r) => r.name).sort()).toEqual(['Tx1', 'Tx2']);
+
+    // Verify rows persisted past the BEGIN/COMMIT no-ops
+    const all = await stub.getAllUsers();
+    expect(all).toHaveLength(2);
+  });
+
+  it('clone() returns the same instance (MikroORM compatibility)', async () => {
+    const stub = getStub('clone-test');
+    expect(await stub.dialectCloneIsSelf()).toBe(true);
+  });
 });
