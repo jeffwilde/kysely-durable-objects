@@ -157,18 +157,18 @@ export class TestDO extends DurableObject {
     await this.db.destroy();
   }
 
-  async runTransaction(): Promise<UserRow[]> {
-    return (await this.db.transaction().execute(async (trx) => {
-      await trx
-        .insertInto('users')
-        .values({ name: 'Tx1', email: 'tx1@example.com' } as any)
-        .execute();
-      await trx
-        .insertInto('users')
-        .values({ name: 'Tx2', email: 'tx2@example.com' } as any)
-        .execute();
-      return await trx.selectFrom('users').selectAll().execute();
-    })) as UserRow[];
+  async runTransactionExpectingThrow(): Promise<string> {
+    try {
+      await this.db.transaction().execute(async (trx) => {
+        await trx
+          .insertInto('users')
+          .values({ name: 'Tx1', email: 'tx1@example.com' } as any)
+          .execute();
+      });
+      return 'no-throw';
+    } catch (e: any) {
+      return String(e?.message ?? e);
+    }
   }
 
   async dialectCloneIsSelf(): Promise<boolean> {

@@ -59,20 +59,28 @@ export class DurableObjectSqliteDialect extends SqliteDialect {
     super({
       database: () => ({
         prepare(query: string) {
-          // CF Workers blocks raw BEGIN/COMMIT/ROLLBACK/SAVEPOINT SQL inside a DO.
-          // Kysely's transaction layer issues these via prepare().run(), so we turn
-          // transaction control into a no-op. DOs are serialized per-instance, so
-          // explicit transactions add no atomicity anyway.
-          const isTxControl = TRANSACTION_CONTROL.test(query);
+          // Durable Objects block raw BEGIN/COMMIT/ROLLBACK/SAVEPOINT SQL, and
+          // there is no way to safely bridge Kysely's stepwise async transaction
+          // lifecycle (begin → many awaits → commit/rollback) onto DO's atomic
+          // synchronous transactionSync(closure) primitive. Silently no-op'ing
+          // these statements would turn rollback into a footgun — partial writes
+          // would persist while the user code thought they had been undone.
+          // For atomic blocks, use `ctx.storage.transactionSync(() => { ... })`
+          // directly with raw `ctx.storage.sql.exec(...)` calls inside.
+          if (TRANSACTION_CONTROL.test(query)) {
+            throw new Error(
+              'kysely-do: explicit transactions are not supported inside ' +
+                'Durable Objects. Use ctx.storage.transactionSync(() => { ... }) ' +
+                'with raw ctx.storage.sql.exec() calls for atomic blocks.',
+            );
+          }
 
           return {
             reader:
-              !isTxControl &&
-              (/^\s*(select|pragma|explain|with)/i.test(query) ||
-                /\breturning\b/i.test(query)),
+              /^\s*(select|pragma|explain|with)/i.test(query) ||
+              /\breturning\b/i.test(query),
 
             all(params: ReadonlyArray<unknown>): unknown[] {
-              if (isTxControl) return [];
               return sql.exec(query, ...params).toArray();
             },
 
@@ -80,7 +88,6 @@ export class DurableObjectSqliteDialect extends SqliteDialect {
               changes: number | bigint;
               lastInsertRowid: number | bigint;
             } {
-              if (isTxControl) return { changes: 0, lastInsertRowid: 0 };
               sql.exec(query, ...params);
               // DO SqlStorage doesn't return changes/lastInsertRowid from exec(),
               // so we query SQLite's built-in functions to retrieve them.
@@ -97,13 +104,11 @@ export class DurableObjectSqliteDialect extends SqliteDialect {
             },
 
             get(params: ReadonlyArray<unknown>): unknown {
-              if (isTxControl) return undefined;
               const rows = sql.exec(query, ...params).toArray();
               return rows[0];
             },
 
             *iterate(params: ReadonlyArray<unknown>): IterableIterator<unknown> {
-              if (isTxControl) return;
               for (const row of sql.exec(query, ...params)) {
                 yield row;
               }

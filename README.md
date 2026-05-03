@@ -108,7 +108,7 @@ The dialect bridges DO `SqlStorage` to the `better-sqlite3` interface that Kysel
 
 ### Limitations
 
-- **Transactions are silent no-ops**: CF Workers blocks raw `BEGIN`/`COMMIT`/`ROLLBACK`/`SAVEPOINT` SQL inside a DO. The dialect intercepts these statements and skips them so `db.transaction()` doesn't throw, but you get no atomicity — DOs are already serialized per-instance, so explicit transactions add nothing. Set `implicitTransactions: false` when using with MikroORM.
+- **Explicit transactions throw**: Durable Objects block raw `BEGIN`/`COMMIT`/`ROLLBACK`/`SAVEPOINT` SQL, and there is no way to safely bridge Kysely's stepwise async transaction lifecycle (begin → many awaits → commit/rollback) onto DO's atomic synchronous `transactionSync(closure)` primitive. The dialect throws with a clear message rather than silently dropping `BEGIN` — a no-op rollback would leave partial writes intact while user code thought they had been undone. For atomic blocks, use `ctx.storage.transactionSync(() => { ... })` directly with raw `ctx.storage.sql.exec()` calls. With MikroORM, set `implicitTransactions: false` so the ORM never issues `BEGIN`.
 - **`changes()` / `last_insert_rowid()` are separate queries**: After each mutation, two additional `SELECT` calls retrieve the metadata. This is safe because DOs are single-threaded (no concurrent request interleaving).
 - **No prepared statement caching**: Each query creates a fresh `exec()` call. DO storage handles its own query optimization internally.
 

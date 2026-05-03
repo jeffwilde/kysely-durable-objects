@@ -186,17 +186,17 @@ describe('DurableObjectSqliteDialect in workerd', () => {
     await expect(stub.destroyDb()).resolves.not.toThrow();
   });
 
-  it('Kysely transactions are no-ops but inserts still apply', async () => {
+  it('Kysely transactions throw with a clear error', async () => {
     const stub = getStub('transaction-test');
     await stub.setupSchema();
 
-    const insideTx = await stub.runTransaction();
-    expect(insideTx).toHaveLength(2);
-    expect(insideTx.map((r) => r.name).sort()).toEqual(['Tx1', 'Tx2']);
+    const message = await stub.runTransactionExpectingThrow();
+    expect(message).toMatch(/explicit transactions are not supported/i);
+    expect(message).toMatch(/transactionSync/);
 
-    // Verify rows persisted past the BEGIN/COMMIT no-ops
+    // No partial writes — the BEGIN threw before any INSERT ran
     const all = await stub.getAllUsers();
-    expect(all).toHaveLength(2);
+    expect(all).toHaveLength(0);
   });
 
   it('clone() returns the same instance (MikroORM compatibility)', async () => {
