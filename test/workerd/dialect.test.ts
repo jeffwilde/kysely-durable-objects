@@ -155,6 +155,15 @@ describe('DurableObjectSqliteDialect in workerd', () => {
     });
   });
 
+  describe('streaming', () => {
+    it('db.selectFrom(...).stream() yields all rows in order', async () => {
+      const stub = getStub('stream-test');
+      const result = await stub.streamRows();
+      expect(result.count).toBe(5);
+      expect(result.names).toEqual(['A', 'B', 'C', 'D', 'E']);
+    });
+  });
+
   describe('error paths', () => {
     it('UNIQUE constraint violations surface a real error', async () => {
       const stub = getStub('error-unique');

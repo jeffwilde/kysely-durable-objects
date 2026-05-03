@@ -1,0 +1,19 @@
+{
+  "name": "kysely-durable-objects-example-basic",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "kysely": "^0.28.15",
+    "kysely-durable-objects": "^0.1.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260408.1",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.0.0"
+  }
+}

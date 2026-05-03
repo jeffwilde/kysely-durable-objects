@@ -23,6 +23,8 @@ npm install kysely-durable-objects kysely
 
 `kysely` is a peer dependency.
 
+A runnable example lives at [`examples/basic-worker/`](./examples/basic-worker/) — a Cloudflare Worker with a Durable Object using the dialect, including a `withDoTransaction` block. `git clone && cd examples/basic-worker && pnpm install && pnpm dev`.
+
 ## Usage
 
 ### Kysely
@@ -106,6 +108,12 @@ CI runs the full suite across a matrix of `compatibility_date` values, so any si
 npm test
 ```
 
+### Production smoke tests
+
+A separate workflow ([`.github/workflows/smoke.yml`](./.github/workflows/smoke.yml)) deploys a focused smoke worker to a real Cloudflare account, runs a subset of the suite over HTTP against the actual production runtime, and tears the deployment down. Runs weekly on a cron and can be triggered manually. Requires three repo secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `SMOKE_TOKEN` (random gating value).
+
+This catches divergences between local `workerd` and the production runtime that the local matrix can't see.
+
 ## API
 
 ```ts
@@ -123,6 +131,18 @@ Type re-exports for convenience: `SqlStorage`, `SqlStorageCursor`, `DurableObjec
 
 Kysely's built-in `Migrator` works against this dialect end-to-end. The `kysely_migration` and `kysely_migration_lock` tables are created automatically on first run; the lock table is semantically redundant inside a DO (per-instance serialization already prevents concurrent migration), but harmless.
 
+## Compatibility
+
+| | Tested against |
+|---|---|
+| **Kysely** | `^0.28.15` (peer dep `>=0.27.0`) |
+| **MikroORM** | v7+ (uses Kysely under the hood) |
+| **Cloudflare `compatibility_date`** | `2024-09-23` (DO SQLite GA) → `2026-04-06` (current); CI exercises 4 dates across that range |
+| **Node** | `22` for the test/build toolchain (workerd ships its own runtime) |
+| **Package manager** | `pnpm` (any modern version; `pnpm@10` pinned in `packageManager`) |
+
+Kysely is a peer dependency. MikroORM is supported via `driverOptions`; see [Usage → MikroORM](#mikroorm).
+
 ## Platform limitations
 
 Properties of the Durable Object runtime that consumers need to plan around. The dialect surfaces these honestly rather than hiding them.
@@ -136,12 +156,13 @@ Properties of the Durable Object runtime that consumers need to plan around. The
 - **`changes()` and `last_insert_rowid()` aren't returned by `exec()`.** The dialect issues two extra `SELECT` calls after each mutation to retrieve them. Safe — storage operations inside a DO are serialized.
 - **Async workflows can interleave at `await` boundaries.** Per-instance serialization is at the storage-operation level, not at the application code level. For read-modify-write across awaits, wrap with `ctx.blockConcurrencyWhile`.
 
-## TODO
+## Roadmap
 
-- Production-environment smoke tests — opt-in suite that deploys to a real Cloudflare account and runs the test matrix against the actual production runtime, surfacing any divergences from local `workerd`.
-- Streaming queries — `db.selectFrom(...).stream()` (Kysely's user-facing streaming API) isn't directly tested.
-- Examples directory — a runnable mini-Worker showing the dialect end-to-end (`git clone && wrangler dev`).
-- Compatibility matrix in README — explicit Kysely / MikroORM versions tested against.
+The 0.1.x line covers the core functionality and tests. Open ideas for future work:
+
+- Native streaming with chunked iteration — Kysely's `.stream()` works through our `iterate()` (tested), but DO storage returns rows in one shot, so "streaming" is buffer-then-yield. A chunked variant that pages large result sets via `LIMIT/OFFSET` could meaningfully reduce peak memory.
+- Generated `kysely-codegen` integration so consumers can introspect a deployed DO's schema.
+- Bundle-size and overhead benchmarks vs. raw `ctx.storage.sql.exec()`.
 
 ## License
 

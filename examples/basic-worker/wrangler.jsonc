@@ -1,0 +1,9 @@
+{
+  "name": "kysely-do-basic-example",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-06",
+  "durable_objects": {
+    "bindings": [{ "name": "USERS", "class_name": "UserStore" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UserStore"] }]
+}

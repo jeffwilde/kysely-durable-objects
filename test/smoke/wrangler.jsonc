@@ -1,0 +1,9 @@
+{
+  "name": "kysely-do-smoke",
+  "main": "worker.ts",
+  "compatibility_date": "2026-04-06",
+  "durable_objects": {
+    "bindings": [{ "name": "SMOKE_DO", "class_name": "SmokeDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SmokeDO"] }]
+}

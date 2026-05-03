@@ -151,6 +151,19 @@ export class TestDO extends DurableObject {
     return dialect.clone() === dialect;
   }
 
+  async streamRows(): Promise<{ count: number; names: string[] }> {
+    await this.setupSchema();
+    for (const n of ['A', 'B', 'C', 'D', 'E']) {
+      await this.insertUser(n, `${n}@e`);
+    }
+    const names: string[] = [];
+    const stream = this.db.selectFrom('users').select('name').stream();
+    for await (const row of stream) {
+      names.push((row as any).name);
+    }
+    return { count: names.length, names };
+  }
+
   // ---------- error paths ----------
 
   async attemptUniqueViolation(): Promise<string> {

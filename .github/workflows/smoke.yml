@@ -1,0 +1,60 @@
+name: Smoke (real Cloudflare)
+
+# Opt-in. Deploys a Worker + DO to a real Cloudflare account, runs a focused
+# smoke suite over HTTP, and tears the deployment down. Catches divergences
+# between local workerd and the production runtime.
+#
+# Required repo secrets:
+#   CLOUDFLARE_API_TOKEN — token with Workers + DO write
+#   CLOUDFLARE_ACCOUNT_ID — target account
+#   SMOKE_TOKEN — random shared secret gating the /run endpoint
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 6 * * 1' # Monday 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      SMOKE_TOKEN: ${{ secrets.SMOKE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      - name: Push SMOKE_TOKEN as a Worker secret
+        run: |
+          echo -n "$SMOKE_TOKEN" | npx wrangler secret put SMOKE_TOKEN \
+            --config test/smoke/wrangler.jsonc
+
+      - name: Deploy smoke worker
+        id: deploy
+        run: |
+          out=$(npx wrangler deploy --config test/smoke/wrangler.jsonc 2>&1 | tee /dev/stderr)
+          # Extract the deployed URL — wrangler prints `https://<name>.<subdomain>.workers.dev`
+          url=$(printf '%s\n' "$out" | grep -oE 'https://[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev' | head -1)
+          if [ -z "$url" ]; then
+            echo "Could not parse deploy URL from wrangler output" >&2
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Run smoke client
+        env:
+          SMOKE_URL: ${{ steps.deploy.outputs.url }}
+        run: pnpm exec tsx test/smoke/client.ts
+
+      - name: Tear down deployment
+        if: always()
+        run: npx wrangler delete --config test/smoke/wrangler.jsonc --force
