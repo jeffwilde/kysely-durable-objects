@@ -13,7 +13,7 @@ const TRANSACTION_CONTROL = /^\s*(begin|commit|rollback|savepoint|release)\b/i;
  *
  * ```ts
  * import { Kysely } from 'kysely';
- * import { DurableObjectSqliteDialect } from 'kysely-do';
+ * import { DurableObjectSqliteDialect } from 'kysely-durable-objects';
  *
  * export class MyDO extends DurableObject {
  *   private db: Kysely<MySchema>;
@@ -32,7 +32,7 @@ const TRANSACTION_CONTROL = /^\s*(begin|commit|rollback|savepoint|release)\b/i;
  * ```ts
  * import { MikroORM } from '@mikro-orm/core';
  * import { SqliteDriver } from '@mikro-orm/sql';
- * import { DurableObjectSqliteDialect } from 'kysely-do';
+ * import { DurableObjectSqliteDialect } from 'kysely-durable-objects';
  *
  * export class MyDO extends DurableObject {
  *   private orm: MikroORM;
@@ -69,7 +69,7 @@ export class DurableObjectSqliteDialect extends SqliteDialect {
           // directly with raw `ctx.storage.sql.exec(...)` calls inside.
           if (TRANSACTION_CONTROL.test(query)) {
             throw new Error(
-              'kysely-do: explicit transactions are not supported inside ' +
+              'kysely-durable-objects: explicit transactions are not supported inside ' +
                 'Durable Objects. Use ctx.storage.transactionSync(() => { ... }) ' +
                 'with raw ctx.storage.sql.exec() calls for atomic blocks.',
             );

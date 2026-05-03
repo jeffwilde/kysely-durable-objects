@@ -1,4 +1,4 @@
-# kysely-do
+# kysely-durable-objects
 
 [Kysely](https://kysely.dev/) dialect for [Cloudflare Durable Object SQLite storage](https://developers.cloudflare.com/durable-objects/api/sql-storage/) (`ctx.storage.sql`).
 
@@ -7,7 +7,7 @@ Bridges the DO `SqlStorage` API to the `better-sqlite3`-compatible interface tha
 ## Install
 
 ```bash
-npm install kysely-do kysely
+npm install kysely-durable-objects kysely
 ```
 
 `kysely` is a peer dependency — install it alongside this package.
@@ -18,7 +18,7 @@ npm install kysely-do kysely
 
 ```ts
 import { Kysely } from 'kysely';
-import { DurableObjectSqliteDialect } from 'kysely-do';
+import { DurableObjectSqliteDialect } from 'kysely-durable-objects';
 import { DurableObject } from 'cloudflare:workers';
 
 interface MySchema {
@@ -60,7 +60,7 @@ This dialect was built specifically to enable [MikroORM](https://mikro-orm.io/) 
 ```ts
 import { MikroORM } from '@mikro-orm/core';
 import { SqliteDriver } from '@mikro-orm/sql';
-import { DurableObjectSqliteDialect } from 'kysely-do';
+import { DurableObjectSqliteDialect } from 'kysely-durable-objects';
 import { DurableObject } from 'cloudflare:workers';
 import compiledFunctions from './compiled-functions.js';
 import { User, Post } from './entities.js';
@@ -125,7 +125,7 @@ Tests run inside the actual Cloudflare Workers runtime (`workerd`) via [`@cloudf
 ### `DurableObjectSqliteDialect`
 
 ```ts
-import { DurableObjectSqliteDialect } from 'kysely-do';
+import { DurableObjectSqliteDialect } from 'kysely-durable-objects';
 
 new DurableObjectSqliteDialect(sql: SqlStorage)
 ```
@@ -139,7 +139,7 @@ new DurableObjectSqliteDialect(sql: SqlStorage)
 ### Types
 
 ```ts
-import type { SqlStorage, SqlStorageCursor } from 'kysely-do';
+import type { SqlStorage, SqlStorageCursor } from 'kysely-durable-objects';
 ```
 
 TypeScript interfaces for the DO SQLite Storage API, exported for convenience. These mirror the types from `@cloudflare/workers-types` so you don't need a hard dependency on that package.

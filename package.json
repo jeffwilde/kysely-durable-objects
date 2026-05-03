@@ -1,5 +1,5 @@
 {
-  "name": "kysely-do",
+  "name": "kysely-durable-objects",
   "version": "0.1.0",
   "description": "Kysely dialect for Cloudflare Durable Object SQLite storage (ctx.storage.sql)",
   "type": "module",
@@ -35,7 +35,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jeffwilde/kysely-do.git"
+    "url": "https://github.com/jeffwilde/kysely-durable-objects.git"
   },
   "peerDependencies": {
     "kysely": ">=0.27.0"
