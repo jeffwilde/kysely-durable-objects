@@ -3,7 +3,15 @@
 [![CI](https://github.com/jeffwilde/kysely-durable-objects/actions/workflows/ci.yml/badge.svg)](https://github.com/jeffwilde/kysely-durable-objects/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/kysely-durable-objects.svg)](https://www.npmjs.com/package/kysely-durable-objects)
 
-[Kysely](https://kysely.dev/) dialect for [Cloudflare Durable Object SQLite storage](https://developers.cloudflare.com/durable-objects/api/sql-storage/) (`ctx.storage.sql`). Bridges the DO `SqlStorage` API to the `better-sqlite3`-compatible interface Kysely expects.
+[Kysely](https://kysely.dev/) dialect for [Cloudflare Durable Object SQLite storage](https://developers.cloudflare.com/durable-objects/api/sql-storage/) (`ctx.storage.sql`). Hardened against the runtime's quirks, with a comprehensive test suite that exercises the dialect inside real `workerd`.
+
+## Highlights
+
+- **Real `insertId`.** `last_insert_rowid()` is queried after every mutation, so `RETURNING` clauses, Kysely's `numAffectedRows`, and MikroORM's identity tracking all work end-to-end.
+- **`BigInt` parameters that actually bind.** DO's `SqlStorageValue` rejects `bigint`, so the dialect transparently stringifies bigints before binding. SQLite parses the string into a native 64-bit `INTEGER` without truncation.
+- **Honest transactions.** `db.transaction()` throws an actionable error pointing to the bundled `withDoTransaction` helper. We never silently drop `BEGIN` — a no-op rollback would let earlier writes persist while user code thought they had been undone.
+- **MikroORM-ready.** `clone()` returns the same instance, so MikroORM's `Utils.copy()` deep-clone of `driverOptions` doesn't sever the closure around `ctx.storage.sql`.
+- **Eval-free.** Every code path runs under workerd's production `new Function()` ban. The test suite proves it by patching `Function`/`eval` to throw and re-running the full CRUD path.
 
 ## Install
 
@@ -64,7 +72,7 @@ Pre-generate compiled functions with `npx mikro-orm compile`. See the [MikroORM 
 
 ### Atomicity (`withDoTransaction`)
 
-`db.transaction()` **throws** on this dialect — there is no safe way to bridge Kysely's async stepwise BEGIN/COMMIT/ROLLBACK lifecycle to DO's synchronous `transactionSync(closure)` primitive. For atomic blocks, use the bundled helper:
+`db.transaction()` throws on this dialect — there is no safe way to bridge Kysely's async stepwise BEGIN/COMMIT/ROLLBACK lifecycle to DO's synchronous `transactionSync(closure)` primitive. For atomic blocks, use the bundled helper:
 
 ```ts
 import { withDoTransaction } from 'kysely-durable-objects';
@@ -77,13 +85,20 @@ withDoTransaction(ctx.storage, (sql) => {
 
 Throwing inside the closure rolls back. The closure is synchronous — that's a hard constraint of `transactionSync`.
 
-## Limitations
+## Tested in real workerd
 
-- **Explicit transactions throw.** Use `withDoTransaction`. With MikroORM, set `implicitTransactions: false`.
-- **`changes()` and `last_insert_rowid()` are separate queries.** Two extra SELECTs after each mutation. Safe because storage operations are serialized inside a DO.
-- **`BigInt` parameters are coerced to strings** before binding. SQLite parses them into native 64-bit `INTEGER` without truncation.
-- **`BigInt` values > 2^53 lose precision on direct read.** DO returns `INTEGER` columns as JS `Number`. Recover the full 64-bit value with `CAST(col AS TEXT)`.
-- **No prepared-statement caching.** DO storage handles its own optimization.
+26 tests, all running inside the same C++ runtime Cloudflare deploys (via [`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/)), against real `ctx.storage.sql`:
+
+- **CRUD & isolation** — schema builder, INSERT/SELECT/UPDATE/DELETE, RETURNING, auto-increment, per-DO storage isolation, `runInDurableObject` introspection, `destroy()` semantics.
+- **Eval-guarded CRUD** — full CRUD path re-run with `Function`/`eval` patched to throw, simulating the production `new Function()` ban that the local runner relaxes.
+- **`withDoTransaction`** — commit and rollback semantics under real `transactionSync`.
+- **Kysely Migrator end-to-end** — runs real migrations, verifies the `kysely_migration` tracking table populates correctly, and that the target schema lands.
+- **Type fidelity** — `NULL` across all column affinities, `BLOB` (`Uint8Array`) bit-exact roundtrip, `BigInt` within and beyond JS safe-integer range, `REAL` precision, dates as integer ms, JSON text + `json_extract()`.
+- **Concurrency** — reproduces the `await`-boundary lost-update race and proves `blockConcurrencyWhile` mitigates it.
+
+```bash
+npm test
+```
 
 ## API
 
@@ -100,15 +115,20 @@ Type re-exports for convenience: `SqlStorage`, `SqlStorageCursor`, `DurableObjec
 
 ## Migrations
 
-Kysely's built-in `Migrator` works against this dialect. The `kysely_migration` and `kysely_migration_lock` tables are created automatically on first run; the lock table is semantically redundant in a DO (per-instance serialization already prevents concurrent migration), but harmless.
+Kysely's built-in `Migrator` works against this dialect end-to-end. The `kysely_migration` and `kysely_migration_lock` tables are created automatically on first run; the lock table is semantically redundant inside a DO (per-instance serialization already prevents concurrent migration), but harmless.
 
-## Testing
+## Platform notes
 
-```bash
-npm test
-```
+These are properties of the Durable Object runtime, not of this dialect. They're called out so consumers can plan around them.
 
-Tests run inside the actual Cloudflare Workers runtime (`workerd`) via [`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/), against real `ctx.storage.sql` inside a real Durable Object. Where the local runner diverges from production, the suite simulates the production constraint.
+- **`new Function()` / `eval()` are banned** during request handling. The dialect's hot path is eval-free; if you use MikroORM, configure `compiledFunctions` to ship pre-compiled query plans.
+- **No raw `BEGIN`/`COMMIT`/`ROLLBACK`/`SAVEPOINT`.** DO storage exposes atomicity only via `ctx.storage.transactionSync(closure)`. Use `withDoTransaction` (above).
+- **`INTEGER` columns return as JS `Number`.** `BigInt` values up to 2^53 roundtrip bit-exactly. Beyond that, the value lands in storage intact (we coerce on write) but a direct read rounds. Recover the full 64-bit value with `CAST(col AS TEXT)`:
+  ```sql
+  SELECT CAST(big_id AS TEXT) AS big_id_str FROM ledger WHERE ...
+  ```
+- **`changes()` and `last_insert_rowid()` aren't returned by `exec()`.** The dialect issues two extra `SELECT` calls after each mutation to retrieve them. Safe — storage operations inside a DO are serialized.
+- **Async workflows can interleave at `await` boundaries.** Per-instance serialization is at the storage operation level, not at the application code level. For read-modify-write across awaits, wrap with `ctx.blockConcurrencyWhile`.
 
 ## TODO
 
