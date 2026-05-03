@@ -35,8 +35,7 @@ jobs:
       # Uses npm CLI directly because pnpm doesn't yet do the OIDC handshake
       # (https://github.com/pnpm/pnpm/issues/9812). npm 11.5.1+ exchanges the
       # GitHub id-token for a registry credential automatically.
-      - run: npm install -g npm@latest
-      - run: npm publish --access public --provenance
+      - run: npx npm@latest publish --access public --provenance
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
