@@ -28,38 +28,24 @@ interface UserSchema {
   types: TypesRow;
 }
 
-/**
- * Monkey-patches `Function` constructor and `eval` to throw `EvalError`,
- * simulating production workerd behavior where dynamic code generation
- * is prohibited during request handling.
- *
- * Returns a restore function to undo the patch.
- */
+// Production workerd blocks dynamic code generation during request handling.
+// The local test runner doesn't, so we patch in the same restriction to keep
+// the dialect honest. Returns a restore function.
 function patchEvalToThrow(): () => void {
   const OriginalFunction = globalThis.Function;
   const originalEval = globalThis.eval;
 
-  // Proxy the Function constructor so `new Function(...)` throws EvalError.
-  // We use a Proxy rather than a plain replacement so that `instanceof Function`
-  // and other intrinsics still work for existing functions.
   const FunctionProxy = new Proxy(OriginalFunction, {
-    construct(_target, args) {
-      throw new EvalError(
-        'Code generation from strings disallowed for this context',
-      );
+    construct() {
+      throw new EvalError('Code generation from strings disallowed for this context');
     },
-    apply(_target, _thisArg, args) {
-      throw new EvalError(
-        'Code generation from strings disallowed for this context',
-      );
+    apply() {
+      throw new EvalError('Code generation from strings disallowed for this context');
     },
   });
   globalThis.Function = FunctionProxy as FunctionConstructor;
-
   globalThis.eval = () => {
-    throw new EvalError(
-      'Code generation from strings disallowed for this context',
-    );
+    throw new EvalError('Code generation from strings disallowed for this context');
   };
 
   return () => {
@@ -79,18 +65,11 @@ export class TestDO extends DurableObject {
     });
   }
 
-  /**
-   * Enable the eval guard — patches Function/eval to throw EvalError.
-   * All subsequent method calls on this DO instance will run with
-   * eval blocked, simulating production workerd restrictions.
-   */
+  /** Patch Function/eval to throw EvalError for the rest of this DO's life. */
   async enableEvalGuard(): Promise<void> {
-    if (!this.restoreEval) {
-      this.restoreEval = patchEvalToThrow();
-    }
+    if (!this.restoreEval) this.restoreEval = patchEvalToThrow();
   }
 
-  /** Disable the eval guard — restores original Function/eval. */
   async disableEvalGuard(): Promise<void> {
     if (this.restoreEval) {
       this.restoreEval();
@@ -98,18 +77,14 @@ export class TestDO extends DurableObject {
     }
   }
 
-  /** Returns 'eval-blocked' if the guard is active, 'eval-allowed' otherwise. */
+  /** Returns 'eval-allowed' or 'eval-blocked' depending on the guard state. */
   async testEvalRestriction(): Promise<string> {
     try {
       // eslint-disable-next-line no-new-func
-      const fn = new Function('return 1 + 1');
-      fn();
+      new Function('return 1 + 1')();
       return 'eval-allowed';
     } catch (e: any) {
-      if (
-        e instanceof EvalError ||
-        e.message?.includes('Code generation from strings')
-      ) {
+      if (e instanceof EvalError || e.message?.includes('Code generation from strings')) {
         return 'eval-blocked';
       }
       return `unexpected-error: ${e.message}`;
@@ -127,12 +102,11 @@ export class TestDO extends DurableObject {
   }
 
   async insertUser(name: string, email: string): Promise<UserRow> {
-    const result = await this.db
+    return (await this.db
       .insertInto('users')
       .values({ name, email } as any)
       .returning(['id', 'name', 'email'])
-      .executeTakeFirstOrThrow();
-    return result as UserRow;
+      .executeTakeFirstOrThrow()) as UserRow;
   }
 
   async getUser(id: number): Promise<UserRow | undefined> {
@@ -144,25 +118,15 @@ export class TestDO extends DurableObject {
   }
 
   async getAllUsers(): Promise<UserRow[]> {
-    return (await this.db
-      .selectFrom('users')
-      .selectAll()
-      .execute()) as UserRow[];
+    return (await this.db.selectFrom('users').selectAll().execute()) as UserRow[];
   }
 
   async updateUser(id: number, name: string): Promise<void> {
-    await this.db
-      .updateTable('users')
-      .set({ name })
-      .where('id', '=', id)
-      .execute();
+    await this.db.updateTable('users').set({ name }).where('id', '=', id).execute();
   }
 
   async deleteUser(id: number): Promise<void> {
-    await this.db
-      .deleteFrom('users')
-      .where('id', '=', id)
-      .execute();
+    await this.db.deleteFrom('users').where('id', '=', id).execute();
   }
 
   async destroyDb(): Promise<void> {
@@ -205,7 +169,7 @@ export class TestDO extends DurableObject {
   }
 
   async roundtripNull(): Promise<TypesRow> {
-    const result = await this.db
+    return (await this.db
       .insertInto('types')
       .values({
         null_col: null,
@@ -216,14 +180,12 @@ export class TestDO extends DurableObject {
         json_text_col: null,
       } as any)
       .returningAll()
-      .executeTakeFirstOrThrow();
-    return result as TypesRow;
+      .executeTakeFirstOrThrow()) as TypesRow;
   }
 
   async roundtripBlob(bytes: number[]): Promise<{
     sentLen: number;
     gotLen: number;
-    isUint8Array: boolean;
     sameBytes: boolean;
   }> {
     const sent = new Uint8Array(bytes);
@@ -234,19 +196,15 @@ export class TestDO extends DurableObject {
       .executeTakeFirstOrThrow();
     const got = (result as any).blob_col as Uint8Array | ArrayBuffer | null;
     const gotBytes = got instanceof Uint8Array ? got : new Uint8Array(got as ArrayBuffer);
-    const sameBytes =
-      gotBytes.length === sent.length &&
-      sent.every((b, i) => b === gotBytes[i]);
     return {
       sentLen: sent.length,
       gotLen: gotBytes.length,
-      isUint8Array: got instanceof Uint8Array || got instanceof ArrayBuffer,
-      sameBytes,
+      sameBytes:
+        gotBytes.length === sent.length && sent.every((b, i) => b === gotBytes[i]),
     };
   }
 
   async roundtripBigIntSafe(): Promise<{ sent: string; got: string }> {
-    // Within JS safe integer range — roundtrips bit-exact through Number
     const sent = 1234567890123n;
     const result = await this.db
       .insertInto('types')
@@ -262,12 +220,9 @@ export class TestDO extends DurableObject {
 
   async roundtripBigIntBeyondSafe(): Promise<{
     sent: string;
-    storedAsText: string;
     readAsNumber: string;
     readAsCastText: string;
   }> {
-    // Beyond JS safe-integer (2^53) — DO returns INTEGER as JS Number, so
-    // direct reads lose precision. Casting to TEXT in SQL preserves it.
     const sent = 9007199254740993n; // 2^53 + 1
     const inserted = await this.db
       .insertInto('types')
@@ -280,7 +235,6 @@ export class TestDO extends DurableObject {
     `.execute(this.db);
     return {
       sent: sent.toString(),
-      storedAsText: sent.toString(),
       readAsNumber: String((inserted as any).bigint_col),
       readAsCastText: cast.rows[0]?.as_text ?? '',
     };
@@ -297,8 +251,7 @@ export class TestDO extends DurableObject {
   }
 
   async roundtripDate(): Promise<{ sentMs: number; gotMs: number }> {
-    const date = new Date('2026-04-29T12:00:00.123Z');
-    const sentMs = date.getTime();
+    const sentMs = new Date('2026-04-29T12:00:00.123Z').getTime();
     const result = await this.db
       .insertInto('types')
       .values({ date_ms_col: sentMs } as any)
@@ -307,32 +260,25 @@ export class TestDO extends DurableObject {
     return { sentMs, gotMs: (result as any).date_ms_col };
   }
 
-  async roundtripJson(): Promise<{
-    sent: string;
-    got: string;
-    extracted: string | null;
-  }> {
-    const obj = { name: 'Alice', tags: ['a', 'b'], nested: { count: 3 } };
-    const sent = JSON.stringify(obj);
+  async roundtripJson(): Promise<{ sent: string; got: string; extracted: string | null }> {
+    const sent = JSON.stringify({ name: 'Alice', tags: ['a', 'b'], nested: { count: 3 } });
     const inserted = await this.db
       .insertInto('types')
       .values({ json_text_col: sent } as any)
       .returning(['id', 'json_text_col'])
       .executeTakeFirstOrThrow();
-    // Also exercise SQLite's json_extract via raw sql template
-    const idVal = (inserted as any).id as number;
-    const extractRow = await sql<{ name: string }>`
-      select json_extract(json_text_col, '$.name') as name
-      from types where id = ${idVal}
+    const id = (inserted as any).id as number;
+    const extracted = await sql<{ name: string }>`
+      select json_extract(json_text_col, '$.name') as name from types where id = ${id}
     `.execute(this.db);
     return {
       sent,
       got: (inserted as any).json_text_col as string,
-      extracted: extractRow.rows[0]?.name ?? null,
+      extracted: extracted.rows[0]?.name ?? null,
     };
   }
 
-  // ---------- Kysely migrations ----------
+  // ---------- migrations ----------
 
   async runKyselyMigrations(): Promise<{
     results: Array<{ migrationName: string; status: string }>;
@@ -353,10 +299,7 @@ export class TestDO extends DurableObject {
           },
           '2026_05_02_add_color': {
             async up(db) {
-              await db.schema
-                .alterTable('widget')
-                .addColumn('color', 'text')
-                .execute();
+              await db.schema.alterTable('widget').addColumn('color', 'text').execute();
             },
           },
         };
@@ -367,103 +310,33 @@ export class TestDO extends DurableObject {
     const { results, error } = await migrator.migrateToLatest();
     if (error) throw error;
 
-    // Verify Kysely's migration tracking table is populated
     const tracking = await sql<{ count: number }>`
       select count(*) as count from kysely_migration
     `.execute(this.db);
-    const migrationTableHasRow = (tracking.rows[0]?.count ?? 0) > 0;
-
-    // Verify the target schema actually got created
     const schemaCheck = await sql<{ name: string }>`
       select name from sqlite_master where type = 'table' and name = 'widget'
     `.execute(this.db);
-    const targetTableExists = schemaCheck.rows.length > 0;
 
     return {
       results: (results ?? []).map((r) => ({
         migrationName: r.migrationName,
         status: r.status,
       })),
-      migrationTableHasRow,
-      targetTableExists,
+      migrationTableHasRow: (tracking.rows[0]?.count ?? 0) > 0,
+      targetTableExists: schemaCheck.rows.length > 0,
     };
   }
 
-  // ---------- withDoTransaction helper ----------
+  // ---------- withDoTransaction ----------
 
   async atomicBlockSucceeds(): Promise<{ before: number; after: number }> {
-    // Two raw INSERTs inside a single transactionSync — both should land
-    const before = await this.db
-      .selectFrom('users')
-      .select(this.db.fn.count<number>('id').as('c'))
-      .executeTakeFirstOrThrow();
+    const before = await this.userCount();
     withDoTransaction(this.ctx.storage, (s) => {
       s.exec("insert into users (name, email) values ('A1', 'a1@e')");
       s.exec("insert into users (name, email) values ('A2', 'a2@e')");
     });
-    const after = await this.db
-      .selectFrom('users')
-      .select(this.db.fn.count<number>('id').as('c'))
-      .executeTakeFirstOrThrow();
-    return { before: Number(before.c), after: Number(after.c) };
-  }
-
-  // ---------- concurrency ----------
-
-  /**
-   * Reads count, awaits a microtask, then increments. Without
-   * blockConcurrencyWhile, two concurrent calls can interleave at the await
-   * boundary and lose an update (lost-update). Used to demonstrate that
-   * Kysely-on-DO is NOT immune to interleaving across await points.
-   */
-  async raceyIncrement(): Promise<void> {
-    const row = await this.db
-      .selectFrom('users')
-      .select(this.db.fn.count<number>('id').as('c'))
-      .executeTakeFirstOrThrow();
-    // Force a microtask boundary so two concurrent calls can interleave
-    await Promise.resolve();
-    await this.db
-      .insertInto('users')
-      .values({ name: `inc-${Number(row.c)}`, email: `${Number(row.c)}@e` } as any)
-      .execute();
-  }
-
-  /**
-   * Same logic as raceyIncrement, but the entire body runs inside
-   * blockConcurrencyWhile, which serializes against other requests.
-   */
-  async safeIncrement(): Promise<void> {
-    await this.ctx.blockConcurrencyWhile(async () => {
-      const row = await this.db
-        .selectFrom('users')
-        .select(this.db.fn.count<number>('id').as('c'))
-        .executeTakeFirstOrThrow();
-      await Promise.resolve();
-      await this.db
-        .insertInto('users')
-        .values({ name: `safe-${Number(row.c)}`, email: `${Number(row.c)}@e` } as any)
-        .execute();
-    });
-  }
-
-  async runRaceyConcurrent(n: number): Promise<{ rowCount: number; uniqueNames: number }> {
-    await Promise.all(Array.from({ length: n }, () => this.raceyIncrement()));
-    return this.summarizeConcurrencyState();
-  }
-
-  async runSafeConcurrent(n: number): Promise<{ rowCount: number; uniqueNames: number }> {
-    await Promise.all(Array.from({ length: n }, () => this.safeIncrement()));
-    return this.summarizeConcurrencyState();
-  }
-
-  private async summarizeConcurrencyState(): Promise<{
-    rowCount: number;
-    uniqueNames: number;
-  }> {
-    const all = await this.db.selectFrom('users').selectAll().execute();
-    const names = new Set(all.map((r) => (r as any).name));
-    return { rowCount: all.length, uniqueNames: names.size };
+    const after = await this.userCount();
+    return { before, after };
   }
 
   async atomicBlockRollsBackOnThrow(): Promise<{
@@ -471,10 +344,7 @@ export class TestDO extends DurableObject {
     after: number;
     caught: boolean;
   }> {
-    const before = await this.db
-      .selectFrom('users')
-      .select(this.db.fn.count<number>('id').as('c'))
-      .executeTakeFirstOrThrow();
+    const before = await this.userCount();
     let caught = false;
     try {
       withDoTransaction(this.ctx.storage, (s) => {
@@ -485,18 +355,64 @@ export class TestDO extends DurableObject {
     } catch {
       caught = true;
     }
-    const after = await this.db
+    const after = await this.userCount();
+    return { before, after, caught };
+  }
+
+  // ---------- concurrency ----------
+
+  async runRaceyConcurrent(n: number): Promise<{ rowCount: number; uniqueNames: number }> {
+    await Promise.all(Array.from({ length: n }, () => this.raceyIncrement()));
+    return this.summarizeUsers();
+  }
+
+  async runSafeConcurrent(n: number): Promise<{ rowCount: number; uniqueNames: number }> {
+    await Promise.all(Array.from({ length: n }, () => this.safeIncrement()));
+    return this.summarizeUsers();
+  }
+
+  // Read-modify-write across an await boundary: vulnerable to interleaving.
+  private async raceyIncrement(): Promise<void> {
+    const c = await this.userCount();
+    await Promise.resolve();
+    await this.db
+      .insertInto('users')
+      .values({ name: `inc-${c}`, email: `${c}@e` } as any)
+      .execute();
+  }
+
+  // Same body, serialized by blockConcurrencyWhile.
+  private async safeIncrement(): Promise<void> {
+    await this.ctx.blockConcurrencyWhile(async () => {
+      const c = await this.userCount();
+      await Promise.resolve();
+      await this.db
+        .insertInto('users')
+        .values({ name: `safe-${c}`, email: `${c}@e` } as any)
+        .execute();
+    });
+  }
+
+  private async userCount(): Promise<number> {
+    const row = await this.db
       .selectFrom('users')
       .select(this.db.fn.count<number>('id').as('c'))
       .executeTakeFirstOrThrow();
-    return { before: Number(before.c), after: Number(after.c), caught };
+    return Number(row.c);
+  }
+
+  private async summarizeUsers(): Promise<{ rowCount: number; uniqueNames: number }> {
+    const all = await this.db.selectFrom('users').selectAll().execute();
+    return {
+      rowCount: all.length,
+      uniqueNames: new Set(all.map((r) => (r as any).name)).size,
+    };
   }
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const id = env.TEST_DO.idFromName('test');
-    const stub = env.TEST_DO.get(id);
+  async fetch(_req: Request, env: Env): Promise<Response> {
+    env.TEST_DO.idFromName('test'); // keep binding referenced
     return new Response('ok');
   },
 };
