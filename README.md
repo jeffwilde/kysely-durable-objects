@@ -176,7 +176,7 @@ The ~11× cost on the Kysely path is dominated by Kysely's query compilation plu
 
 ## Releases
 
-See [GitHub Releases](https://github.com/jeffwilde/kysely-durable-objects/releases) for the changelog. The 1.0 line is gated on real-world adoption rather than further feature work — the API is stable today.
+See [GitHub Releases](https://github.com/jeffwilde/kysely-durable-objects/releases) for the changelog.
 
 ## License
 
