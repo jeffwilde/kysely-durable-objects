@@ -7,7 +7,7 @@
 
 ## Highlights
 
-- **Comprehensively tested in real `workerd`.** 30+ tests run inside the same C++ runtime Cloudflare deploys, against real `ctx.storage.sql`. CI exercises the suite across a matrix of `compatibility_date` values (DO-SQLite GA → today) so silent API drift in the runtime can't sneak in. A production-parity guard re-runs the full CRUD path with `new Function()` patched to throw, proving the dialect doesn't rely on dynamic code generation.
+- **Comprehensively tested in real `workerd`.** 35 tests run inside the same C++ runtime Cloudflare deploys, against real `ctx.storage.sql`. CI exercises the suite across a matrix of `compatibility_date` values (DO-SQLite GA → today) so silent API drift in the runtime can't sneak in. A production-parity guard re-runs the full CRUD path with `new Function()` patched to throw, proving the dialect doesn't rely on dynamic code generation.
 - **`insertId` and `numAffectedRows` work end-to-end.** The dialect queries `last_insert_rowid()` and `changes()` after each mutation, so Kysely's `RETURNING`, `numAffectedRows`, and MikroORM identity tracking all behave correctly.
 - **`BigInt` parameter binding.** DO's storage layer rejects `bigint` at the binding boundary. The dialect transparently stringifies bigints so SQLite parses them as native 64-bit `INTEGER` without truncation.
 - **Honors DO atomicity semantics.** `db.transaction()` throws an actionable error pointing to the bundled `withDoTransaction` helper, which wraps `ctx.storage.transactionSync()`. The dialect never silently swallows a `BEGIN` — that would turn rollback into a corruption hazard.
@@ -21,7 +21,7 @@
 npm install kysely-durable-objects kysely
 ```
 
-`kysely` is a peer dependency.
+`kysely` is a peer dependency. Releases are signed and ship with [npm provenance attestations](https://docs.npmjs.com/generating-provenance-statements) — every published version links back to the exact GitHub Actions run that built it.
 
 A runnable example lives at [`examples/basic-worker/`](./examples/basic-worker/) — a Cloudflare Worker with a Durable Object using the dialect, including a `withDoTransaction` block. `git clone && cd examples/basic-worker && pnpm install && pnpm dev`.
 
@@ -91,7 +91,7 @@ Throwing inside the closure rolls back. The closure is synchronous — that's a 
 
 ## Tested in real workerd
 
-30+ tests, all running inside the same C++ runtime Cloudflare deploys (via [`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/)), against real `ctx.storage.sql`:
+35 tests, all running inside the same C++ runtime Cloudflare deploys (via [`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/)), against real `ctx.storage.sql`:
 
 - **CRUD & isolation** — schema builder, INSERT/SELECT/UPDATE/DELETE, RETURNING, auto-increment, per-DO storage isolation, `runInDurableObject` introspection, `destroy()` semantics.
 - **Eval-guarded CRUD** — full CRUD path re-run with `Function`/`eval` patched to throw, simulating the production `new Function()` ban that the local runner relaxes.
@@ -146,7 +146,7 @@ Kysely's built-in `Migrator` works against this dialect end-to-end. The `kysely_
 | **MikroORM** | v7+ (uses Kysely under the hood) |
 | **Cloudflare `compatibility_date`** | `2024-09-23` (DO SQLite GA) → `2026-04-06` (current); CI exercises 4 dates across that range |
 | **Node** | `22` for the test/build toolchain (workerd ships its own runtime) |
-| **Package manager** | `pnpm` (any modern version; `pnpm@10` pinned in `packageManager`) |
+| **Package manager** | `pnpm@10.33.2` (pinned in `packageManager`) |
 
 Kysely is a peer dependency. MikroORM is supported via `driverOptions`; see [Usage → MikroORM](#mikroorm).
 
@@ -165,26 +165,18 @@ Properties of the Durable Object runtime that consumers need to plan around. The
 
 ## Performance
 
-Single-row inserts measured against local workerd (`workerd 2026-04-30`, 2000 ops):
+Single-row inserts, measured against local `workerd 2026-04-30` on a developer machine (2000 ops, indicative only — CI runners and production hardware will differ):
 
 | Path | Throughput | Time / 2000 ops |
 |---|---|---|
 | Raw `ctx.storage.sql.exec()` | ~500K ops/s | ~4ms |
 | Kysely via this dialect | ~44K ops/s | ~45ms |
 
-The ~11× cost on the Kysely path is dominated by Kysely's query compilation plus the two SELECTs the dialect issues after each mutation to retrieve `changes()` and `last_insert_rowid()`. The benchmark runs as part of the workerd suite and emits numbers via `console.log` on each CI run.
+The ~11× cost on the Kysely path is dominated by Kysely's query compilation plus the two SELECTs the dialect issues after each mutation to retrieve `changes()` and `last_insert_rowid()`. The benchmark is part of the workerd suite and emits numbers via `console.log` on every CI run, so regressions show up in PR logs.
 
-## Roadmap
+## Releases
 
-Items resolved in 0.2.0:
-
-- ✅ **Schema introspector** — `introspectSchema` + `generateKyselyDbInterface` now ship as a one-shot migration aid. Strike if Cloudflare ever ships a native `wrangler do export`.
-- ✅ **Chunked streaming was investigated and is unnecessary.** A workerd-level probe (checked in as `cursorIsLazy`) confirms `SqlStorageCursor` lazy-streams rows from SQLite — `rowsRead` is 0 or 1 before the first `next()` call and grows during iteration. Our `iterate()` path is already memory-efficient; pagination via `LIMIT/OFFSET` would only add roundtrips.
-- ✅ **Overhead benchmark** — checked in and reports per-run.
-
-Open:
-
-- Real-world adoption signal before bumping to 1.0 — API is stable but not yet exercised outside this repo.
+See [GitHub Releases](https://github.com/jeffwilde/kysely-durable-objects/releases) for the changelog. The 1.0 line is gated on real-world adoption rather than further feature work — the API is stable today.
 
 ## License
 
