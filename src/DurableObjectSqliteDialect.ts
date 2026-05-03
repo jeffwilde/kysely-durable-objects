@@ -3,6 +3,21 @@ import type { SqlStorage } from './types.js';
 
 const TRANSACTION_CONTROL = /^\s*(begin|commit|rollback|savepoint|release)\b/i;
 
+// DO's `SqlStorageValue` is `ArrayBuffer | string | number | null` — `bigint`
+// is rejected at the binding layer. Convert to string so SQLite still parses
+// the value into its native 64-bit INTEGER column without truncation.
+function coerceParams(params: ReadonlyArray<unknown>): unknown[] {
+  let needsCopy = false;
+  for (const p of params) {
+    if (typeof p === 'bigint') {
+      needsCopy = true;
+      break;
+    }
+  }
+  if (!needsCopy) return params as unknown[];
+  return params.map((p) => (typeof p === 'bigint' ? p.toString() : p));
+}
+
 /**
  * Kysely dialect for Cloudflare Durable Object SQLite storage.
  *
@@ -81,14 +96,14 @@ export class DurableObjectSqliteDialect extends SqliteDialect {
               /\breturning\b/i.test(query),
 
             all(params: ReadonlyArray<unknown>): unknown[] {
-              return sql.exec(query, ...params).toArray();
+              return sql.exec(query, ...coerceParams(params)).toArray();
             },
 
             run(params: ReadonlyArray<unknown>): {
               changes: number | bigint;
               lastInsertRowid: number | bigint;
             } {
-              sql.exec(query, ...params);
+              sql.exec(query, ...coerceParams(params));
               // DO SqlStorage doesn't return changes/lastInsertRowid from exec(),
               // so we query SQLite's built-in functions to retrieve them.
               const changesResult = sql
@@ -104,12 +119,12 @@ export class DurableObjectSqliteDialect extends SqliteDialect {
             },
 
             get(params: ReadonlyArray<unknown>): unknown {
-              const rows = sql.exec(query, ...params).toArray();
+              const rows = sql.exec(query, ...coerceParams(params)).toArray();
               return rows[0];
             },
 
             *iterate(params: ReadonlyArray<unknown>): IterableIterator<unknown> {
-              for (const row of sql.exec(query, ...params)) {
+              for (const row of sql.exec(query, ...coerceParams(params))) {
                 yield row;
               }
             },

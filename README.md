@@ -106,11 +106,34 @@ The dialect bridges DO `SqlStorage` to the `better-sqlite3` interface that Kysel
 | `db.prepare(sql).iterate(params)` | `sql.exec(query, ...params)[Symbol.iterator]` | Direct mapping |
 | `db.close()` | N/A (DO manages lifecycle) | No-op |
 
+### Atomicity: `withDoTransaction` helper
+
+Explicit `db.transaction()` calls **throw** in this dialect — see the limitations section below for why. For atomic blocks, use the bundled helper, which wraps `ctx.storage.transactionSync()`:
+
+```ts
+import { withDoTransaction } from 'kysely-durable-objects';
+
+withDoTransaction(ctx.storage, (sql) => {
+  sql.exec('update accounts set balance = balance - ? where id = ?', 100, fromId);
+  sql.exec('update accounts set balance = balance + ? where id = ?', 100, toId);
+});
+```
+
+If the closure throws, the transaction is rolled back. The closure is synchronous — that's a hard constraint of `transactionSync`.
+
+### Type fidelity
+
+The dialect exercises real `ctx.storage.sql` in workerd tests for these column types: `NULL`, `BLOB` (Uint8Array), `BigInt`, `REAL`, dates (stored as integer ms), and JSON (TEXT + `json_extract()`). Two notable behaviors:
+
+- **`BigInt` parameters are coerced to strings** before binding — DO's `SqlStorageValue` rejects `bigint`, but SQLite parses the string into native 64-bit `INTEGER` without truncation.
+- **`BigInt` values > 2^53 lose precision on direct read** — DO returns `INTEGER` columns as JS `Number`. To recover the full 64-bit value, read the column with `CAST(col AS TEXT)`.
+
 ### Limitations
 
-- **Explicit transactions throw**: Durable Objects block raw `BEGIN`/`COMMIT`/`ROLLBACK`/`SAVEPOINT` SQL, and there is no way to safely bridge Kysely's stepwise async transaction lifecycle (begin → many awaits → commit/rollback) onto DO's atomic synchronous `transactionSync(closure)` primitive. The dialect throws with a clear message rather than silently dropping `BEGIN` — a no-op rollback would leave partial writes intact while user code thought they had been undone. For atomic blocks, use `ctx.storage.transactionSync(() => { ... })` directly with raw `ctx.storage.sql.exec()` calls. With MikroORM, set `implicitTransactions: false` so the ORM never issues `BEGIN`.
+- **Explicit transactions throw**: Durable Objects block raw `BEGIN`/`COMMIT`/`ROLLBACK`/`SAVEPOINT` SQL, and there is no way to safely bridge Kysely's stepwise async transaction lifecycle (begin → many awaits → commit/rollback) onto DO's atomic synchronous `transactionSync(closure)` primitive. The dialect throws with a clear message rather than silently dropping `BEGIN` — a no-op rollback would leave partial writes intact while user code thought they had been undone. Use `withDoTransaction` (above) for atomic blocks. With MikroORM, set `implicitTransactions: false` so the ORM never issues `BEGIN`.
 - **`changes()` / `last_insert_rowid()` are separate queries**: After each mutation, two additional `SELECT` calls retrieve the metadata. This is safe because DOs are single-threaded (no concurrent request interleaving).
 - **No prepared statement caching**: Each query creates a fresh `exec()` call. DO storage handles its own query optimization internally.
+- **`BigInt` precision loss on read past 2^53** — see Type fidelity above.
 
 ## Testing
 
@@ -136,6 +159,23 @@ new DurableObjectSqliteDialect(sql: SqlStorage)
 
 **Returns:** A Kysely `Dialect` that can be passed to `new Kysely({ dialect })` or MikroORM's `driverOptions`.
 
+### `withDoTransaction`
+
+```ts
+import { withDoTransaction } from 'kysely-durable-objects';
+
+withDoTransaction<T>(
+  storage: { sql: SqlStorage; transactionSync<T>(fn: () => T): T },
+  closure: (sql: SqlStorage) => T,
+): T
+```
+
+Atomic block of synchronous raw SQL. Throws roll back the transaction. See [Atomicity](#atomicity-withdotransaction-helper) above.
+
+### Migrations
+
+Kysely's built-in `Migrator` works against this dialect end-to-end. The `kysely_migration` and `kysely_migration_lock` tables are created automatically on first run; the lock table is semantically redundant inside a DO (per-instance serialization already prevents concurrent migration), but harmless.
+
 ### Types
 
 ```ts
@@ -147,9 +187,6 @@ TypeScript interfaces for the DO SQLite Storage API, exported for convenience. T
 ## TODO
 
 - Real-DO sanity mode — opt-in suite that deploys an ephemeral Worker + DO to a real Cloudflare account and runs the full test matrix against production runtime
-- Type-fidelity tests for `NULL`, `BLOB`, `BigInt`, dates, JSON
-- Concurrency tests covering `await`-boundary interleaving, input/output gates, and `blockConcurrencyWhile`
-- Kysely migrations support — verify the migration runner works inside a DO and document whether the `kysely_migration_lock` table is needed given per-DO serialization (likely redundant)
 
 ## License
 

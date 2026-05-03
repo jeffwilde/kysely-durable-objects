@@ -203,4 +203,149 @@ describe('DurableObjectSqliteDialect in workerd', () => {
     const stub = getStub('clone-test');
     expect(await stub.dialectCloneIsSelf()).toBe(true);
   });
+
+  // ---------- type fidelity ----------
+
+  describe('type fidelity', () => {
+    it('roundtrips NULL across all column affinities', async () => {
+      const stub = getStub('types-null');
+      await stub.setupTypesSchema();
+      const row = await stub.roundtripNull();
+      expect(row.null_col).toBeNull();
+      expect(row.blob_col).toBeNull();
+      expect(row.bigint_col).toBeNull();
+      expect(row.real_col).toBeNull();
+      expect(row.date_ms_col).toBeNull();
+      expect(row.json_text_col).toBeNull();
+    });
+
+    it('roundtrips BLOB (Uint8Array) bytes intact', async () => {
+      const stub = getStub('types-blob');
+      await stub.setupTypesSchema();
+      const bytes = [0, 1, 2, 127, 128, 255, 0xde, 0xad, 0xbe, 0xef];
+      const result = await stub.roundtripBlob(bytes);
+      expect(result.gotLen).toBe(result.sentLen);
+      expect(result.sameBytes).toBe(true);
+    });
+
+    it('roundtrips BigInt values within JS safe-integer range bit-exactly', async () => {
+      const stub = getStub('types-bigint-safe');
+      await stub.setupTypesSchema();
+      const result = await stub.roundtripBigIntSafe();
+      expect(result.got).toBe(result.sent);
+    });
+
+    it('preserves BigInt > 2^53 on write but loses precision on direct read; CAST AS TEXT recovers it', async () => {
+      // Documents a hard limitation of DO storage: SqlStorageValue returns
+      // INTEGER as JS Number, so values beyond 2^53 round on the read path.
+      // The escape hatch is `CAST(col AS TEXT)` in SQL, which preserves the
+      // full 64-bit value as a string.
+      const stub = getStub('types-bigint-large');
+      await stub.setupTypesSchema();
+      const result = await stub.roundtripBigIntBeyondSafe();
+
+      // Direct read DOES lose precision (rounds 2^53+1 down to 2^53)
+      expect(result.readAsNumber).not.toBe(result.sent);
+      expect(result.readAsNumber).toBe('9007199254740992');
+
+      // CAST AS TEXT preserves full precision
+      expect(result.readAsCastText).toBe(result.sent);
+    });
+
+    it('roundtrips REAL values without precision loss', async () => {
+      const stub = getStub('types-real');
+      await stub.setupTypesSchema();
+      const result = await stub.roundtripReal();
+      expect(result.got).toBe(result.sent);
+    });
+
+    it('roundtrips dates stored as integer ms', async () => {
+      const stub = getStub('types-date');
+      await stub.setupTypesSchema();
+      const result = await stub.roundtripDate();
+      expect(result.gotMs).toBe(result.sentMs);
+      expect(new Date(result.gotMs).toISOString()).toBe(
+        '2026-04-29T12:00:00.123Z',
+      );
+    });
+
+    it('roundtrips JSON text and supports json_extract()', async () => {
+      const stub = getStub('types-json');
+      await stub.setupTypesSchema();
+      const result = await stub.roundtripJson();
+      expect(result.got).toBe(result.sent);
+      expect(JSON.parse(result.got)).toEqual({
+        name: 'Alice',
+        tags: ['a', 'b'],
+        nested: { count: 3 },
+      });
+      expect(result.extracted).toBe('Alice');
+    });
+  });
+
+  // ---------- migrations ----------
+
+  it("Kysely's Migrator runs against the dialect end-to-end", async () => {
+    const stub = getStub('migrations-test');
+    const result = await stub.runKyselyMigrations();
+
+    expect(result.results.map((r) => r.status)).toEqual(['Success', 'Success']);
+    expect(result.results.map((r) => r.migrationName)).toEqual([
+      '2026_05_01_initial',
+      '2026_05_02_add_color',
+    ]);
+    expect(result.migrationTableHasRow).toBe(true);
+    expect(result.targetTableExists).toBe(true);
+  });
+
+  // ---------- withDoTransaction helper ----------
+
+  describe('withDoTransaction', () => {
+    it('commits all writes when the closure returns', async () => {
+      const stub = getStub('atomic-commit');
+      await stub.setupSchema();
+      const counts = await stub.atomicBlockSucceeds();
+      expect(counts.before).toBe(0);
+      expect(counts.after).toBe(2);
+    });
+
+    it('rolls back all writes when the closure throws', async () => {
+      const stub = getStub('atomic-rollback');
+      await stub.setupSchema();
+      const counts = await stub.atomicBlockRollsBackOnThrow();
+      expect(counts.caught).toBe(true);
+      expect(counts.before).toBe(0);
+      // No writes from inside the failed closure should be visible
+      expect(counts.after).toBe(0);
+    });
+  });
+
+  // ---------- concurrency ----------
+
+  describe('concurrency', () => {
+    it('Kysely calls CAN interleave across await boundaries (lost-update without blockConcurrencyWhile)', async () => {
+      // Demonstrates that DOs serialize storage *operations* but not async
+      // *workflows*. Two requests calling read-modify-write concurrently can
+      // both observe the same pre-update count, causing duplicate writes.
+      const stub = getStub('concurrency-racey');
+      await stub.setupSchema();
+      const result = await stub.runRaceyConcurrent(5);
+      expect(result.rowCount).toBe(5);
+      // If interleaving happened, multiple workers saw the same `count` and
+      // wrote duplicate names. We assert the *possibility* — uniqueNames
+      // strictly less than rowCount proves the race.
+      // (DO scheduling is deterministic-ish; we just assert >= 1 collision.)
+      expect(result.uniqueNames).toBeLessThan(result.rowCount);
+    });
+
+    it('blockConcurrencyWhile serializes the workflow and prevents lost updates', async () => {
+      const stub = getStub('concurrency-safe');
+      await stub.setupSchema();
+      const result = await stub.runSafeConcurrent(5);
+      expect(result.rowCount).toBe(5);
+      // Each call ran serially, so each saw a distinct count and wrote a
+      // distinct name. No collisions.
+      expect(result.uniqueNames).toBe(result.rowCount);
+    });
+  });
 });
