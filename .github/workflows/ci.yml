@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  lint-typecheck-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,6 +17,43 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm build
+
+  test-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Compat-date matrix: catches silent API drift in DO storage and the
+        # Workers runtime. workerd emulates each historical date's flag set,
+        # so a failure here means real production behavior changed.
+        compatibility_date:
+          - '2024-09-23'  # DO SQLite GA
+          - '2025-04-01'
+          - '2025-08-01'
+          - '2026-04-06'  # current pinned default
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Pin compatibility_date for this matrix leg
+        run: |
+          sed -i 's|"compatibility_date": "[^"]*"|"compatibility_date": "${{ matrix.compatibility_date }}"|' wrangler.jsonc
+          grep compatibility_date wrangler.jsonc
       - run: pnpm test
+
+  # Aggregator for branch protection — required status check.
+  ci:
+    needs: [lint-typecheck-build, test-matrix]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          [ "${{ needs.lint-typecheck-build.result }}" = "success" ] || exit 1
+          [ "${{ needs.test-matrix.result }}" = "success" ] || exit 1

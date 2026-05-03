@@ -155,6 +155,41 @@ describe('DurableObjectSqliteDialect in workerd', () => {
     });
   });
 
+  describe('error paths', () => {
+    it('UNIQUE constraint violations surface a real error', async () => {
+      const stub = getStub('error-unique');
+      const message = await stub.attemptUniqueViolation();
+      expect(message).not.toBe('no-throw');
+      expect(message.toLowerCase()).toMatch(/unique|constraint/);
+    });
+
+    it('NOT NULL constraint violations surface a real error', async () => {
+      const stub = getStub('error-notnull');
+      const message = await stub.attemptNotNullViolation();
+      expect(message).not.toBe('no-throw');
+      expect(message.toLowerCase()).toMatch(/not null|constraint/);
+    });
+
+    it('SQL syntax errors surface a real error', async () => {
+      const stub = getStub('error-syntax');
+      await stub.setupSchema();
+      const message = await stub.attemptSyntaxError();
+      expect(message).not.toBe('no-throw');
+      expect(message.toLowerCase()).toMatch(/syntax|near/);
+    });
+  });
+
+  describe('UPSERT', () => {
+    it('INSERT ... ON CONFLICT DO UPDATE works with RETURNING', async () => {
+      const stub = getStub('upsert-test');
+      const result = await stub.upsertOnConflict();
+      expect(result.afterInsert.name).toBe('Alice');
+      expect(result.afterUpsert.id).toBe(result.afterInsert.id);
+      expect(result.afterUpsert.name).toBe('Alice (updated)');
+      expect(result.rowCount).toBe(1);
+    });
+  });
+
   describe('type fidelity', () => {
     it('roundtrips NULL across all column affinities', async () => {
       const stub = getStub('types-null');

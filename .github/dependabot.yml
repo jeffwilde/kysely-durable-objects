@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      kysely:
+        patterns: ['kysely', '@kysely/*']
+      cloudflare:
+        patterns: ['@cloudflare/*', 'wrangler', 'miniflare', 'workerd']
+      typescript:
+        patterns: ['typescript', '@typescript-eslint/*']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

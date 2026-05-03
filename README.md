@@ -3,15 +3,17 @@
 [![CI](https://github.com/jeffwilde/kysely-durable-objects/actions/workflows/ci.yml/badge.svg)](https://github.com/jeffwilde/kysely-durable-objects/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/kysely-durable-objects.svg)](https://www.npmjs.com/package/kysely-durable-objects)
 
-[Kysely](https://kysely.dev/) dialect for [Cloudflare Durable Object SQLite storage](https://developers.cloudflare.com/durable-objects/api/sql-storage/) (`ctx.storage.sql`). Hardened against the runtime's quirks, with a comprehensive test suite that exercises the dialect inside real `workerd`.
+[Kysely](https://kysely.dev/) dialect for [Cloudflare Durable Object SQLite storage](https://developers.cloudflare.com/durable-objects/api/sql-storage/) (`ctx.storage.sql`). A fully tested, battle-ready dialect that respects the Durable Object runtime's constraints.
 
 ## Highlights
 
-- **Real `insertId`.** `last_insert_rowid()` is queried after every mutation, so `RETURNING` clauses, Kysely's `numAffectedRows`, and MikroORM's identity tracking all work end-to-end.
-- **`BigInt` parameters that actually bind.** DO's `SqlStorageValue` rejects `bigint`, so the dialect transparently stringifies bigints before binding. SQLite parses the string into a native 64-bit `INTEGER` without truncation.
-- **Honest transactions.** `db.transaction()` throws an actionable error pointing to the bundled `withDoTransaction` helper. We never silently drop `BEGIN` — a no-op rollback would let earlier writes persist while user code thought they had been undone.
-- **MikroORM-ready.** `clone()` returns the same instance, so MikroORM's `Utils.copy()` deep-clone of `driverOptions` doesn't sever the closure around `ctx.storage.sql`.
-- **Eval-free.** Every code path runs under workerd's production `new Function()` ban. The test suite proves it by patching `Function`/`eval` to throw and re-running the full CRUD path.
+- **Comprehensively tested in real `workerd`.** 30+ tests run inside the same C++ runtime Cloudflare deploys, against real `ctx.storage.sql`. CI exercises the suite across a matrix of `compatibility_date` values (DO-SQLite GA → today) so silent API drift in the runtime can't sneak in. A production-parity guard re-runs the full CRUD path with `new Function()` patched to throw, proving the dialect doesn't rely on dynamic code generation.
+- **`insertId` and `numAffectedRows` work end-to-end.** The dialect queries `last_insert_rowid()` and `changes()` after each mutation, so Kysely's `RETURNING`, `numAffectedRows`, and MikroORM identity tracking all behave correctly.
+- **`BigInt` parameter binding.** DO's storage layer rejects `bigint` at the binding boundary. The dialect transparently stringifies bigints so SQLite parses them as native 64-bit `INTEGER` without truncation.
+- **Honors DO atomicity semantics.** `db.transaction()` throws an actionable error pointing to the bundled `withDoTransaction` helper, which wraps `ctx.storage.transactionSync()`. The dialect never silently swallows a `BEGIN` — that would turn rollback into a corruption hazard.
+- **MikroORM compatible.** `clone()` returns the same instance so MikroORM's `Utils.copy()` deep-clone of `driverOptions` preserves the closure around `ctx.storage.sql`.
+- **Real error paths.** UNIQUE/NOT NULL violations and SQL syntax errors surface as real exceptions, tested in real workerd.
+- **`UPSERT` (`ON CONFLICT DO UPDATE`)** with `RETURNING` works end-to-end.
 
 ## Install
 
@@ -87,14 +89,18 @@ Throwing inside the closure rolls back. The closure is synchronous — that's a 
 
 ## Tested in real workerd
 
-26 tests, all running inside the same C++ runtime Cloudflare deploys (via [`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/)), against real `ctx.storage.sql`:
+30+ tests, all running inside the same C++ runtime Cloudflare deploys (via [`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/)), against real `ctx.storage.sql`:
 
 - **CRUD & isolation** — schema builder, INSERT/SELECT/UPDATE/DELETE, RETURNING, auto-increment, per-DO storage isolation, `runInDurableObject` introspection, `destroy()` semantics.
 - **Eval-guarded CRUD** — full CRUD path re-run with `Function`/`eval` patched to throw, simulating the production `new Function()` ban that the local runner relaxes.
+- **Error paths** — UNIQUE/NOT NULL constraint violations and SQL syntax errors surface as real exceptions.
+- **`UPSERT`** — `INSERT ... ON CONFLICT DO UPDATE` with `RETURNING`.
 - **`withDoTransaction`** — commit and rollback semantics under real `transactionSync`.
 - **Kysely Migrator end-to-end** — runs real migrations, verifies the `kysely_migration` tracking table populates correctly, and that the target schema lands.
 - **Type fidelity** — `NULL` across all column affinities, `BLOB` (`Uint8Array`) bit-exact roundtrip, `BigInt` within and beyond JS safe-integer range, `REAL` precision, dates as integer ms, JSON text + `json_extract()`.
 - **Concurrency** — reproduces the `await`-boundary lost-update race and proves `blockConcurrencyWhile` mitigates it.
+
+CI runs the full suite across a matrix of `compatibility_date` values, so any silent change to DO storage or Workers runtime behavior between releases is caught.
 
 ```bash
 npm test
@@ -117,22 +123,25 @@ Type re-exports for convenience: `SqlStorage`, `SqlStorageCursor`, `DurableObjec
 
 Kysely's built-in `Migrator` works against this dialect end-to-end. The `kysely_migration` and `kysely_migration_lock` tables are created automatically on first run; the lock table is semantically redundant inside a DO (per-instance serialization already prevents concurrent migration), but harmless.
 
-## Platform notes
+## Platform limitations
 
-These are properties of the Durable Object runtime, not of this dialect. They're called out so consumers can plan around them.
+Properties of the Durable Object runtime that consumers need to plan around. The dialect surfaces these honestly rather than hiding them.
 
 - **`new Function()` / `eval()` are banned** during request handling. The dialect's hot path is eval-free; if you use MikroORM, configure `compiledFunctions` to ship pre-compiled query plans.
 - **No raw `BEGIN`/`COMMIT`/`ROLLBACK`/`SAVEPOINT`.** DO storage exposes atomicity only via `ctx.storage.transactionSync(closure)`. Use `withDoTransaction` (above).
-- **`INTEGER` columns return as JS `Number`.** `BigInt` values up to 2^53 roundtrip bit-exactly. Beyond that, the value lands in storage intact (we coerce on write) but a direct read rounds. Recover the full 64-bit value with `CAST(col AS TEXT)`:
+- **`INTEGER` columns return as JS `Number`.** `BigInt` values up to 2^53 roundtrip bit-exactly. Beyond that, the value lands in storage intact (the dialect coerces on write) but a direct read rounds. Recover the full 64-bit value with `CAST(col AS TEXT)`:
   ```sql
   SELECT CAST(big_id AS TEXT) AS big_id_str FROM ledger WHERE ...
   ```
 - **`changes()` and `last_insert_rowid()` aren't returned by `exec()`.** The dialect issues two extra `SELECT` calls after each mutation to retrieve them. Safe — storage operations inside a DO are serialized.
-- **Async workflows can interleave at `await` boundaries.** Per-instance serialization is at the storage operation level, not at the application code level. For read-modify-write across awaits, wrap with `ctx.blockConcurrencyWhile`.
+- **Async workflows can interleave at `await` boundaries.** Per-instance serialization is at the storage-operation level, not at the application code level. For read-modify-write across awaits, wrap with `ctx.blockConcurrencyWhile`.
 
 ## TODO
 
-- Real-DO sanity mode — opt-in suite that deploys an ephemeral Worker + DO to a real Cloudflare account and runs the full test matrix against production runtime
+- Production-environment smoke tests — opt-in suite that deploys to a real Cloudflare account and runs the test matrix against the actual production runtime, surfacing any divergences from local `workerd`.
+- Streaming queries — `db.selectFrom(...).stream()` (Kysely's user-facing streaming API) isn't directly tested.
+- Examples directory — a runnable mini-Worker showing the dialect end-to-end (`git clone && wrangler dev`).
+- Compatibility matrix in README — explicit Kysely / MikroORM versions tested against.
 
 ## License
 

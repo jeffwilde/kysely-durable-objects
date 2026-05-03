@@ -80,7 +80,6 @@ export class TestDO extends DurableObject {
   /** Returns 'eval-allowed' or 'eval-blocked' depending on the guard state. */
   async testEvalRestriction(): Promise<string> {
     try {
-      // eslint-disable-next-line no-new-func
       new Function('return 1 + 1')();
       return 'eval-allowed';
     } catch (e: any) {
@@ -150,6 +149,80 @@ export class TestDO extends DurableObject {
   async dialectCloneIsSelf(): Promise<boolean> {
     const dialect = new DurableObjectSqliteDialect(this.ctx.storage.sql);
     return dialect.clone() === dialect;
+  }
+
+  // ---------- error paths ----------
+
+  async attemptUniqueViolation(): Promise<string> {
+    await this.db.schema
+      .createTable('uniq')
+      .ifNotExists()
+      .addColumn('id', 'integer', (c) => c.primaryKey())
+      .addColumn('email', 'text', (c) => c.notNull().unique())
+      .execute();
+    await this.db
+      .insertInto('uniq' as any)
+      .values({ id: 1, email: 'a@e' } as any)
+      .execute();
+    try {
+      await this.db
+        .insertInto('uniq' as any)
+        .values({ id: 2, email: 'a@e' } as any)
+        .execute();
+      return 'no-throw';
+    } catch (e: any) {
+      return String(e?.message ?? e);
+    }
+  }
+
+  async attemptNotNullViolation(): Promise<string> {
+    await this.setupSchema();
+    try {
+      await this.db
+        .insertInto('users')
+        .values({ name: null, email: 'x@e' } as any)
+        .execute();
+      return 'no-throw';
+    } catch (e: any) {
+      return String(e?.message ?? e);
+    }
+  }
+
+  async attemptSyntaxError(): Promise<string> {
+    try {
+      await sql`this is not valid sql`.execute(this.db);
+      return 'no-throw';
+    } catch (e: any) {
+      return String(e?.message ?? e);
+    }
+  }
+
+  // ---------- UPSERT ----------
+
+  async upsertOnConflict(): Promise<{
+    afterInsert: { id: number; name: string; email: string };
+    afterUpsert: { id: number; name: string; email: string };
+    rowCount: number;
+  }> {
+    await this.setupSchema();
+    const inserted = (await this.db
+      .insertInto('users')
+      .values({ name: 'Alice', email: 'a@e' } as any)
+      .returning(['id', 'name', 'email'])
+      .executeTakeFirstOrThrow()) as UserRow;
+
+    // INSERT ... ON CONFLICT(id) DO UPDATE — change name, keep id
+    const upserted = (await this.db
+      .insertInto('users')
+      .values({ id: inserted.id, name: 'Alice (updated)', email: 'a@e' } as any)
+      .onConflict((oc) =>
+        oc.column('id').doUpdateSet({ name: 'Alice (updated)' } as any),
+      )
+      .returning(['id', 'name', 'email'])
+      .executeTakeFirstOrThrow()) as UserRow;
+
+    const all = await this.db.selectFrom('users').selectAll().execute();
+    return { afterInsert: inserted, afterUpsert: upserted, rowCount: all.length };
   }
 
   // ---------- type fidelity ----------
