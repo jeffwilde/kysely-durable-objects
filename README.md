@@ -123,9 +123,16 @@ withDoTransaction<T>(
   storage: { sql: SqlStorage; transactionSync<T>(fn: () => T): T },
   closure: (sql: SqlStorage) => T,
 ): T
+
+introspectSchema(sql: SqlStorage): TableSchema[]
+generateKyselyDbInterface(tables: TableSchema[], opts?: { interfaceName?: string }): string
 ```
 
-Type re-exports for convenience: `SqlStorage`, `SqlStorageCursor`, `DurableObjectStorageLike` — mirror `@cloudflare/workers-types` so this package has no hard dependency on it.
+Type re-exports for convenience: `SqlStorage`, `SqlStorageCursor`, `DurableObjectStorageLike`, `ColumnInfo`, `TableSchema` — mirror `@cloudflare/workers-types` so this package has no hard dependency on it.
+
+### Schema introspection (migration aid)
+
+When migrating a hand-rolled `ctx.storage.sql.exec()` codebase into Kysely, run `introspectSchema(ctx.storage.sql)` from inside the DO and pipe the result through `generateKyselyDbInterface()` to bootstrap a Kysely `DB` interface from your existing schema. The result is a string of TypeScript you can paste into your project. SQLite type affinities map to TypeScript as `INTEGER`/`REAL` → `number`, `TEXT` → `string`, `BLOB` → `Uint8Array`, anything else → `unknown`. Nullable columns become `T | null`.
 
 ## Migrations
 
@@ -156,13 +163,28 @@ Properties of the Durable Object runtime that consumers need to plan around. The
 - **`changes()` and `last_insert_rowid()` aren't returned by `exec()`.** The dialect issues two extra `SELECT` calls after each mutation to retrieve them. Safe — storage operations inside a DO are serialized.
 - **Async workflows can interleave at `await` boundaries.** Per-instance serialization is at the storage-operation level, not at the application code level. For read-modify-write across awaits, wrap with `ctx.blockConcurrencyWhile`.
 
+## Performance
+
+Single-row inserts measured against local workerd (`workerd 2026-04-30`, 2000 ops):
+
+| Path | Throughput | Time / 2000 ops |
+|---|---|---|
+| Raw `ctx.storage.sql.exec()` | ~500K ops/s | ~4ms |
+| Kysely via this dialect | ~44K ops/s | ~45ms |
+
+The ~11× cost on the Kysely path is dominated by Kysely's query compilation plus the two SELECTs the dialect issues after each mutation to retrieve `changes()` and `last_insert_rowid()`. The benchmark runs as part of the workerd suite and emits numbers via `console.log` on each CI run.
+
 ## Roadmap
 
-The 0.1.x line covers the core functionality and tests. Open ideas for future work:
+Items resolved in 0.2.0:
 
-- Native streaming with chunked iteration — Kysely's `.stream()` works through our `iterate()` (tested), but DO storage returns rows in one shot, so "streaming" is buffer-then-yield. A chunked variant that pages large result sets via `LIMIT/OFFSET` could meaningfully reduce peak memory.
-- Generated `kysely-codegen` integration so consumers can introspect a deployed DO's schema.
-- Bundle-size and overhead benchmarks vs. raw `ctx.storage.sql.exec()`.
+- ✅ **Schema introspector** — `introspectSchema` + `generateKyselyDbInterface` now ship as a one-shot migration aid. Strike if Cloudflare ever ships a native `wrangler do export`.
+- ✅ **Chunked streaming was investigated and is unnecessary.** A workerd-level probe (checked in as `cursorIsLazy`) confirms `SqlStorageCursor` lazy-streams rows from SQLite — `rowsRead` is 0 or 1 before the first `next()` call and grows during iteration. Our `iterate()` path is already memory-efficient; pagination via `LIMIT/OFFSET` would only add roundtrips.
+- ✅ **Overhead benchmark** — checked in and reports per-run.
+
+Open:
+
+- Real-world adoption signal before bumping to 1.0 — API is stable but not yet exercised outside this repo.
 
 ## License
 

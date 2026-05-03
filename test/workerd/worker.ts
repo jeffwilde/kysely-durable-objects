@@ -2,6 +2,11 @@ import { DurableObject } from 'cloudflare:workers';
 import { Kysely, Migrator, sql, type Migration, type MigrationProvider } from 'kysely';
 import { DurableObjectSqliteDialect } from '../../src/DurableObjectSqliteDialect.js';
 import { withDoTransaction } from '../../src/withDoTransaction.js';
+import {
+  introspectSchema,
+  generateKyselyDbInterface,
+  type TableSchema,
+} from '../../src/introspectSchema.js';
 
 interface Env {
   TEST_DO: DurableObjectNamespace<TestDO>;
@@ -151,6 +156,89 @@ export class TestDO extends DurableObject {
     return dialect.clone() === dialect;
   }
 
+  /**
+   * Insert N rows then iterate them via the SqlStorageCursor returned by
+   * sql.exec. Returns whether the cursor seems to lazily yield (rowsRead
+   * grows during iteration) or eagerly buffer (rowsRead is N before
+   * iteration starts).
+   */
+  /**
+   * Time N inserts done through raw sql.exec vs through Kysely. Lets us pin
+   * the Kysely overhead so it can be reported and regression-tested.
+   */
+  async benchmarkInsertOverhead(n: number): Promise<{
+    raw: { ms: number; opsPerSec: number };
+    kysely: { ms: number; opsPerSec: number };
+    ratio: number;
+  }> {
+    const sqlH = this.ctx.storage.sql;
+
+    // Raw path
+    sqlH.exec('drop table if exists bench_raw');
+    sqlH.exec(
+      'create table bench_raw (id integer primary key autoincrement, name text not null, email text not null)',
+    );
+    const rawStart = performance.now();
+    for (let i = 0; i < n; i++) {
+      sqlH.exec(
+        'insert into bench_raw (name, email) values (?, ?)',
+        `n${i}`,
+        `${i}@e`,
+      );
+    }
+    const rawMs = performance.now() - rawStart;
+
+    // Kysely path
+    await this.db.schema
+      .createTable('bench_k')
+      .ifNotExists()
+      .addColumn('id', 'integer', (c) => c.primaryKey().autoIncrement())
+      .addColumn('name', 'text', (c) => c.notNull())
+      .addColumn('email', 'text', (c) => c.notNull())
+      .execute();
+    const kStart = performance.now();
+    for (let i = 0; i < n; i++) {
+      await (this.db as any)
+        .insertInto('bench_k')
+        .values({ name: `n${i}`, email: `${i}@e` })
+        .execute();
+    }
+    const kMs = performance.now() - kStart;
+
+    return {
+      raw: { ms: rawMs, opsPerSec: (n / rawMs) * 1000 },
+      kysely: { ms: kMs, opsPerSec: (n / kMs) * 1000 },
+      ratio: kMs / rawMs,
+    };
+  }
+
+  async cursorIsLazy(n: number): Promise<{
+    rowsReadBeforeFirstNext: number;
+    rowsReadAfterFirstNext: number;
+    rowsReadAtEnd: number;
+    total: number;
+  }> {
+    await this.setupSchema();
+    for (let i = 0; i < n; i++) {
+      await this.insertUser(`u${i}`, `${i}@e`);
+    }
+    const cursor = this.ctx.storage.sql.exec<{ id: number }>(
+      'select id from users order by id',
+    );
+    const rowsReadBeforeFirstNext = cursor.rowsRead;
+    const first = cursor.next();
+    const rowsReadAfterFirstNext = cursor.rowsRead;
+    let total = first.done ? 0 : 1;
+    while (!cursor.next().done) total++;
+    const rowsReadAtEnd = cursor.rowsRead;
+    return {
+      rowsReadBeforeFirstNext,
+      rowsReadAfterFirstNext,
+      rowsReadAtEnd,
+      total,
+    };
+  }
+
   async streamRows(): Promise<{ count: number; names: string[] }> {
     await this.setupSchema();
     for (const n of ['A', 'B', 'C', 'D', 'E']) {
@@ -162,6 +250,33 @@ export class TestDO extends DurableObject {
       names.push((row as any).name);
     }
     return { count: names.length, names };
+  }
+
+  // ---------- schema introspection ----------
+
+  async introspectAfterCreates(): Promise<TableSchema[]> {
+    await this.setupSchema();
+    await this.db.schema
+      .createTable('orders')
+      .ifNotExists()
+      .addColumn('id', 'integer', (c) => c.primaryKey().autoIncrement())
+      .addColumn('user_id', 'integer', (c) => c.notNull())
+      .addColumn('total_cents', 'integer', (c) => c.notNull().defaultTo(0))
+      .addColumn('memo', 'text')
+      .execute();
+    return introspectSchema(this.ctx.storage.sql);
+  }
+
+  async generateInterfaceFromSchema(): Promise<string> {
+    await this.setupSchema();
+    await this.db.schema
+      .createTable('weird-name')
+      .ifNotExists()
+      .addColumn('id', 'integer', (c) => c.primaryKey())
+      .addColumn('full_name', 'text', (c) => c.notNull())
+      .execute();
+    const tables = introspectSchema(this.ctx.storage.sql);
+    return generateKyselyDbInterface(tables);
   }
 
   // ---------- error paths ----------

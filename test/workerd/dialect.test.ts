@@ -155,12 +155,86 @@ describe('DurableObjectSqliteDialect in workerd', () => {
     });
   });
 
+  describe('schema introspection', () => {
+    it('introspectSchema reports user tables and column metadata', async () => {
+      const stub = getStub('introspect-test');
+      const tables = await stub.introspectAfterCreates();
+      const tableNames = tables.map((t) => t.name).sort();
+      expect(tableNames).toEqual(['orders', 'users']);
+
+      const orders = tables.find((t) => t.name === 'orders')!;
+      const colNames = orders.columns.map((c) => c.name);
+      expect(colNames).toEqual(['id', 'user_id', 'total_cents', 'memo']);
+
+      const idCol = orders.columns.find((c) => c.name === 'id')!;
+      expect(idCol.primaryKey).toBe(true);
+      // SQLite reports notnull=0 for INTEGER PRIMARY KEY (it's a ROWID alias).
+      expect(idCol.notNull).toBe(false);
+
+      const memoCol = orders.columns.find((c) => c.name === 'memo')!;
+      expect(memoCol.notNull).toBe(false);
+      expect(memoCol.declaredType.toUpperCase()).toContain('TEXT');
+
+      const totalCol = orders.columns.find((c) => c.name === 'total_cents')!;
+      expect(totalCol.notNull).toBe(true);
+      expect(totalCol.defaultValue).not.toBeNull();
+    });
+
+    it('generateKyselyDbInterface emits valid TypeScript for the schema', async () => {
+      const stub = getStub('introspect-codegen');
+      const generated = await stub.generateInterfaceFromSchema();
+
+      // Snake_case → PascalCase, dash table name quoted
+      expect(generated).toContain('export interface Users {');
+      expect(generated).toContain('export interface WeirdName {');
+      expect(generated).toContain('export interface DB {');
+      // Quoted key for non-identifier table name
+      expect(generated).toContain('"weird-name": WeirdName;');
+      // Non-null vs nullable
+      expect(generated).toMatch(/full_name:\s*string;/);
+      // Identifier-name table fields not quoted
+      expect(generated).toMatch(/^\s*users:\s*Users;/m);
+    });
+  });
+
+  describe('overhead', () => {
+    it('Kysely insert path completes a large batch within a sane wall time', async () => {
+      // Single-row inserts amplify Kysely's compile + two-extra-SELECTs cost
+      // (changes/last_insert_rowid). workerd's performance.now() has reduced
+      // precision (~1ms) so we use absolute wall time on a big batch rather
+      // than ratio, which catches catastrophic regressions either way.
+      const stub = getStub('overhead-test');
+      const result = await stub.benchmarkInsertOverhead(2000);
+      console.log(
+        `[overhead] raw=${result.raw.ms.toFixed(1)}ms (${result.raw.opsPerSec.toFixed(0)}/s)  ` +
+          `kysely=${result.kysely.ms.toFixed(1)}ms (${result.kysely.opsPerSec.toFixed(0)}/s)`,
+      );
+      // 2000 single-row inserts should fit comfortably under 10s.
+      expect(result.kysely.ms).toBeLessThan(10_000);
+      expect(result.raw.ms).toBeLessThan(10_000);
+    });
+  });
+
   describe('streaming', () => {
     it('db.selectFrom(...).stream() yields all rows in order', async () => {
       const stub = getStub('stream-test');
       const result = await stub.streamRows();
       expect(result.count).toBe(5);
       expect(result.names).toEqual(['A', 'B', 'C', 'D', 'E']);
+    });
+
+    it('SqlStorageCursor lazy-streams rows from SQLite (not buffered)', async () => {
+      // Direct probe of DO's cursor semantics. Lazy streaming means rowsRead
+      // is small before the first next() and grows as we iterate. Eager
+      // buffering would mean rowsRead is N before the first next().
+      // Checked-in evidence that our iterate() is already memory-efficient.
+      const stub = getStub('cursor-probe');
+      const probe = await stub.cursorIsLazy(50);
+      expect(probe.total).toBe(50);
+      expect(probe.rowsReadAtEnd).toBe(50);
+      // The cursor returns 0 (truly lazy) or 1 (one-row read-ahead) before
+      // we manually pull. Either is fine; both are dramatically less than 50.
+      expect(probe.rowsReadBeforeFirstNext).toBeLessThanOrEqual(1);
     });
   });
 
