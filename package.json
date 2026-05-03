@@ -1,6 +1,6 @@
 {
   "name": "kysely-durable-objects",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Kysely dialect for Cloudflare Durable Object SQLite storage (ctx.storage.sql)",
   "type": "module",
   "main": "dist/index.js",
