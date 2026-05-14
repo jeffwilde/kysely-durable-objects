@@ -10,7 +10,7 @@ jobs:
   lint-typecheck-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
@@ -35,7 +35,7 @@ jobs:
           - '2025-08-01'
           - '2026-04-06'  # current pinned default
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
