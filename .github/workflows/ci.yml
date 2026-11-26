@@ -10,9 +10,9 @@ jobs:
   lint-typecheck-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'pnpm'
@@ -33,11 +33,12 @@ jobs:
           - '2024-09-23'  # DO SQLite GA
           - '2025-04-01'
           - '2025-08-01'
-          - '2026-04-06'  # current pinned default
+          - '2026-04-06'  # previous pinned default
+          - '2026-11-23'  # workerd build covered by @cloudflare/vitest-plugin 1.9.2
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'pnpm'

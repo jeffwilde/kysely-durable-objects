@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
-import { Kysely, Migrator, sql, type Migration, type MigrationProvider } from 'kysely';
+import { Kysely, sql } from 'kysely';
+import { Migrator, type Migration, type MigrationProvider } from 'kysely/migration';
 import { DurableObjectSqliteDialect } from '../../src/DurableObjectSqliteDialect.js';
 import { withDoTransaction } from '../../src/withDoTransaction.js';
 import {

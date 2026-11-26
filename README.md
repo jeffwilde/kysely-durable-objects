@@ -91,7 +91,7 @@ Throwing inside the closure rolls back. The closure is synchronous — that's a 
 
 ## Tested in real workerd
 
-35 tests, all running inside the same C++ runtime Cloudflare deploys (via [`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/)), against real `ctx.storage.sql`:
+35 tests, all running inside the same C++ runtime Cloudflare deploys (via [`@cloudflare/vitest-plugin`](https://developers.cloudflare.com/workers/testing/vitest-integration/)), against real `ctx.storage.sql`:
 
 - **CRUD & isolation** — schema builder, INSERT/SELECT/UPDATE/DELETE, RETURNING, auto-increment, per-DO storage isolation, `runInDurableObject` introspection, `destroy()` semantics.
 - **Eval-guarded CRUD** — full CRUD path re-run with `Function`/`eval` patched to throw, simulating the production `new Function()` ban that the local runner relaxes.
@@ -138,15 +138,17 @@ When migrating a hand-rolled `ctx.storage.sql.exec()` codebase into Kysely, run 
 
 Kysely's built-in `Migrator` works against this dialect end-to-end. The `kysely_migration` and `kysely_migration_lock` tables are created automatically on first run; the lock table is semantically redundant inside a DO (per-instance serialization already prevents concurrent migration), but harmless.
 
+Kysely 0.29 moved the migration runtime to a subpath. Import it with `import { Migrator } from 'kysely/migration'`. Kysely 0.27 and 0.28 still export `Migrator` from `kysely`.
+
 ## Compatibility
 
 | | Tested against |
 |---|---|
-| **Kysely** | `^0.28.15` (peer dep `>=0.27.0`) |
+| **Kysely** | `^0.29.9` in development (peer dep `>=0.27.0`) |
 | **MikroORM** | v7+ (uses Kysely under the hood) |
-| **Cloudflare `compatibility_date`** | `2024-09-23` (DO SQLite GA) → `2026-04-06` (current); CI exercises 4 dates across that range |
-| **Node** | `22` for the test/build toolchain (workerd ships its own runtime) |
-| **Package manager** | `pnpm@10.33.2` (pinned in `packageManager`) |
+| **Cloudflare `compatibility_date`** | `2024-09-23` (DO SQLite GA) → `2026-11-23`; local config still pins `2026-04-06`. CI exercises 5 dates across that range |
+| **Node** | `22` for CI (current 22.23.5; Wrangler 4.168 requires `>=22.12.0`). The toolchain also runs on Node 24. |
+| **Package manager** | `pnpm@10.34.9` (pinned in `packageManager`) |
 
 Kysely is a peer dependency. MikroORM is supported via `driverOptions`; see [Usage → MikroORM](#mikroorm).
 
